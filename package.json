@@ -1,0 +1,210 @@
+{
+  "name": "hephaistus",
+  "displayName": "HephAIstus EDA Copilot",
+  "description": "Agentic, layout-preserving EDA Copilot bridging KiCad 10 schematics with Python/SPICE simulations.",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "main": "./out/extension.js",
+  "scripts": {
+    "build": "tsc -p ./",
+    "compile": "tsc -p ./",
+    "lint": "eslint src --ext ts",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run lint",
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package --out out/"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "18.x",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "@vscode/vsce": "^3.9.2",
+    "eslint": "^8.0.0",
+    "glob": "^9.0.0",
+    "typescript": "^5.0.0",
+    "mocha": "^10.0.0",
+    "@vscode/test-electron": "^2.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hephaistus/hephaistus"
+  },
+  "activationEvents": [
+    "onCommand:hephaistus.startSession",
+    "onLanguage:kicad_sch"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "hephaistus.startSession",
+        "title": "HephAIstus: Start Session"
+      },
+      {
+        "command": "hephaistus.sync",
+        "title": "HephAIstus: Sync Now"
+      },
+      {
+        "command": "hephaistus.status",
+        "title": "HephAIstus: Show Status"
+      },
+      {
+        "command": "hephaistus.resetIterations",
+        "title": "HephAIstus: Reset Iterations"
+      },
+      {
+        "command": "hephaistus.approvePatch",
+        "title": "HephAIstus: Approve Patch"
+      },
+      {
+        "command": "hephaistus.rejectPatch",
+        "title": "HephAIstus: Reject Patch"
+      },
+      {
+        "command": "hephaistus.reviewSchematic",
+        "title": "HephAIstus: Review Schematic"
+      },
+      {
+        "command": "hephaistus.createBackup",
+        "title": "HephAIstus: Create Backup"
+      },
+      {
+        "command": "hephaistus.restoreBackup",
+        "title": "HephAIstus: Restore Backup"
+      },
+      {
+        "command": "hephaistus.listBackups",
+        "title": "HephAIstus: List Backups"
+      }
+    ],
+    "configuration": {
+      "title": "HephAIstus",
+      "properties": {
+        "hephaistus.models.sync.provider": {
+          "type": "string",
+          "default": "ollama",
+          "enum": ["ollama", "openrouter"],
+          "description": "LLM provider for sync/ingestion tasks (cheap, local)."
+        },
+        "hephaistus.models.sync.model": {
+          "type": "string",
+          "default": "llama3:8b",
+          "description": "Model name for sync tasks (e.g., llama3:8b, mistral:7b)."
+        },
+        "hephaistus.models.sync.endpoint": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Endpoint for local LLM services (Ollama)."
+        },
+        "hephaistus.models.optimization.provider": {
+          "type": "string",
+          "default": "openrouter",
+          "enum": ["ollama", "openrouter"],
+          "description": "LLM provider for optimization tasks (frontier model)."
+        },
+        "hephaistus.models.optimization.model": {
+          "type": "string",
+          "default": "google/gemini-2.5-flash",
+          "description": "Model name for optimization (e.g., google/gemini-2.5-flash, openai/gpt-4o)."
+        },
+        "hephaistus.models.optimization.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for OpenRouter (stored securely in VS Code Secrets).",
+          "hidden": true
+        },
+        "hephaistus.permissions.level": {
+          "type": "string",
+          "default": "add",
+          "enum": ["values", "add", "delete", "restructure"],
+          "enumDescriptions": [
+            "Modify component values only",
+            "Values + add components to staging area",
+            "Values + add + mark for removal",
+            "All above + add connection stubs"
+          ],
+          "description": "Permission level for LLM schematic modifications."
+        },
+        "hephaistus.iteration.maxAutonomousIterations": {
+          "type": "number",
+          "default": 5,
+          "description": "Maximum autonomous iterations before checkpoint.",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "hephaistus.iteration.checkpointOnStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Create backup before optimization session."
+        },
+        "hephaistus.iteration.autoRevertOnAbort": {
+          "type": "boolean",
+          "default": true,
+          "description": "Revert to backup on abort."
+        },
+        "hephaistus.backup.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable automatic backups before structural changes."
+        },
+        "hephaistus.backup.maxBackups": {
+          "type": "number",
+          "default": 10,
+          "description": "Maximum backups to retain.",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "hephaistus.review.onSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run proactive review on schematic save."
+        },
+        "hephaistus.review.onRequest": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow manual review trigger via command."
+        },
+        "hephaistus.ui.mode": {
+          "type": "string",
+          "default": "simple",
+          "enum": ["simple", "learning", "advanced"],
+          "enumDescriptions": [
+            "Minimal config, clear outcomes (hobbyists)",
+            "Annotations explain reasoning (students)",
+            "Full diagnostics and custom config (professionals)"
+          ],
+          "description": "UI density mode for different audiences."
+        },
+        "hephaistus.execution.maxSteps": {
+          "type": "number",
+          "default": 100,
+          "description": "Maximum simulation steps allowed per execution."
+        },
+        "hephaistus.execution.timeoutSeconds": {
+          "type": "number",
+          "default": 60,
+          "description": "Maximum time in seconds for a simulation to run."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "hephaistus.activitybar",
+          "title": "HephAIstus",
+          "icon": "architect.svg"
+        }
+      ]
+    },
+    "views": {
+      "hephaistus.activitybar": [
+        {
+          "id": "hephaistus.sidebar",
+          "name": "Project Explorer"
+        }
+      ]
+    }
+  }
+}

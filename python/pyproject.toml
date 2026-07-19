@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hephaistus"
+version = "0.1.0"
+description = "KiCad schematic synchronization and SPICE simulation for LLM-assisted circuit optimization"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "HephAIstus Team"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+
+dependencies = [
+    "kiutils>=1.0.0",
+]
+
+[project.optional-dependencies]
+simulation = [
+    "skidl>=1.0.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "mypy>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/hephaistus/hephaistus"
+Documentation = "https://docs.hephaistus.ai"
+Repository = "https://github.com/hephaistus/hephaistus"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hephaistus*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]

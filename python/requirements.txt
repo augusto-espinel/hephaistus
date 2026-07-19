@@ -1,0 +1,14 @@
+# HephAIstus Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# KiCad Schematic Parsing
+kiutils>=1.0.0
+
+# Circuit Design & Simulation
+skidl>=1.0.0
+
+# SPICE Simulation
+# ngspice bindings (if available via pip)
+
+# Additional dependencies
+# inspire: Circuit analysis (when available)

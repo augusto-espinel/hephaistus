@@ -1,0 +1,67 @@
+# HephAIstus VS Code Extension Packaging
+# Files to exclude from the .vsix package
+
+# Development files
+.vscode/**
+.vscode-test/**
+tests/**
+test/**
+*.test.ts
+*.spec.ts
+
+# Source maps
+**/*.ts.map
+
+# TypeScript sources (compiled to out/)
+**/*.ts
+!node_modules/**/*.ts
+
+# Python source (venv created at runtime)
+python/hephaistus/**
+python/tests/**
+python/*.py
+
+# Keep requirements for runtime setup
+# python/requirements.txt - KEEP THIS
+# python/pyproject.toml - KEEP THIS
+
+# Documentation
+docs/**
+memory/**
+*.md
+!README.md
+!CHANGELOG.md
+
+# Build artifacts
+out/test/**
+*.log
+
+# Development scripts
+scripts/bootstrap-venv.sh
+scripts/wrappers/**
+scripts/postinstall.js
+
+# Test fixtures
+fixtures/**
+
+# IDE and editor
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git/**
+.gitignore
+
+# Node modules (bundled separately)
+# node_modules is handled by vsce
+
+# Other
+.eslintrc*
+.prettierrc*
+tsconfig.json

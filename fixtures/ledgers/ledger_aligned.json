@@ -1,0 +1,41 @@
+{
+  "components": [
+    {
+      "ref": "R1",
+      "value": "22k",
+      "nets": [
+        "N$1"
+      ],
+      "lib_id": "R",
+      "footprint": "Resistor_SMD:R_0805_2012Metric"
+    },
+    {
+      "ref": "C1",
+      "value": "100nF",
+      "nets": [
+        "N$2"
+      ],
+      "lib_id": "C",
+      "footprint": "Capacitor_SMD:C_0805_2012Metric"
+    },
+    {
+      "ref": "R_OPT1",
+      "value": "4.7k",
+      "nets": [
+        "V_OUT_OPT",
+        "GND"
+      ],
+      "lib_id": "R",
+      "footprint": "Resistor_SMD:R_0805_2012Metric"
+    },
+    {
+      "ref": "R_NEW1",
+      "value": "1k",
+      "nets": [
+        "N$3"
+      ],
+      "lib_id": "R",
+      "footprint": "Resistor_SMD:R_0805_2012Metric"
+    }
+  ]
+}
