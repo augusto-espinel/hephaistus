@@ -92,9 +92,16 @@ Or more explicitly:
 Read hephaistus/CONTEXT.md, then read docs/vision.md, docs/architecture.md, and the most recent memory logs.
 ```
 
+## Repository
+
+**GitHub:** https://github.com/augusto-espinel/hephaistus
+
+The codebase is versioned and pushed to GitHub. Contributors can clone and follow this context file to get up to speed.
+
 ## Notes for AI
 
 - The project targets hobbyists, students, and professionals — keep this audience range in mind
 - The "stubs" pattern for re-wiring is key: logical connections for simulation, user retains spatial control
 - The project is KiCad-first but architecturally CAD-agnostic (PLECS, GeckoCircuits future targets)
 - Always check memory logs for the latest decisions and context before making changes
+- **GitHub repo exists** — commit significant changes, keep .gitignore updated
