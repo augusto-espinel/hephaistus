@@ -13,6 +13,7 @@ import {
     getSyncStatus,
     onSyncComplete 
 } from './syncOrchestrator';
+import { registerSyncPanel } from './ui/syncPanel';
 
 // Constants for command IDs
 const HEPHAISTUS_START_SESSION_COMMAND = 'hephaistus.startSession';
@@ -192,47 +193,43 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(rejectPatchDisposable);
     log(`Registered command: ${HEPHAISTUS_REJECT_PATCH_COMMAND}`);
 
+    // --- Register Sync Panel ---
+    const syncPanelProvider = registerSyncPanel(context);
+    log('Sync panel registered.');
+
     // --- File System Watcher ---
-    // Watch for changes in KiCad schematic files to trigger background processes.
-    // The pattern '**/*.kicad_sch' should dynamically resolve within the workspace.
+    // Watch for changes to UPDATE STATUS PANEL ONLY (no auto-sync)
+    // User must manually trigger sync via the panel to avoid parsing incomplete work
     const kicadFilePattern = '**/*.kicad_sch';
-    const fileWatcher = vscode.workspace.createFileSystemWatcher(kicadFilePattern);
+    const jsonFilePattern = '**/.hephaistus/*.json';
+    
+    const kicadWatcher = vscode.workspace.createFileSystemWatcher(kicadFilePattern);
+    const jsonWatcher = vscode.workspace.createFileSystemWatcher(jsonFilePattern);
 
-    fileWatcher.onDidCreate(async (uri: vscode.Uri) => {
-        log(`KiCad schematic file created: ${uri.fsPath}. Triggering ingestion...`);
-        try {
-            const result = await runSyncCycle({ forceIngestion: true });
-            if (result.status === 'ok') {
-                log(`Ingestion completed successfully for new file.`);
-                vscode.window.setStatusBarMessage('$(check) HephAIstus: Schematic ingested', 3000);
-            } else {
-                log(`Ingestion result: ${result.status} - ${result.message}`, 'warn');
-            }
-        } catch (error) {
-            log(`Error during ingestion: ${(error as Error).message}`, 'error');
-        }
+    // KiCad file changes - update status only
+    kicadWatcher.onDidChange(() => {
+        log('KiCad file changed - updating sync panel status');
+        syncPanelProvider.refresh();
+    });
+    
+    kicadWatcher.onDidCreate(() => {
+        log('KiCad file created - updating sync panel status');
+        syncPanelProvider.refresh();
+    });
+    
+    kicadWatcher.onDidDelete(() => {
+        log('KiCad file deleted - updating sync panel status');
+        syncPanelProvider.refresh();
     });
 
-    fileWatcher.onDidDelete(async (uri: vscode.Uri) => {
-        log(`KiCad schematic file deleted: ${uri.fsPath}. Cleaning up associated data.`);
-        // Future: Remove from stateHashes and files list
+    // JSON file changes - update status only
+    jsonWatcher.onDidChange(() => {
+        log('JSON state file changed - updating sync panel status');
+        syncPanelProvider.refresh();
     });
 
-    fileWatcher.onDidChange(async (uri: vscode.Uri) => {
-        log(`KiCad schematic file changed: ${uri.fsPath}. Triggering analysis...`);
-        try {
-            const result = await runSyncCycle({ forceIngestion: true });
-            if (result.status === 'ok') {
-                log(`Sync completed successfully.`);
-                vscode.window.setStatusBarMessage('$(sync) HephAIstus: Synced', 3000);
-            } else {
-                log(`Sync result: ${result.status} - ${result.message}`, 'warn');
-            }
-        } catch (error) {
-            log(`Error during sync: ${(error as Error).message}`, 'error');
-        }
-    });
-    log(`FileSystemWatcher started for pattern: ${kicadFilePattern}`);
+    context.subscriptions.push(kicadWatcher, jsonWatcher);
+    log('FileSystemWatchers started for status updates (no auto-sync).');
 
     // --- Initialization Complete ---
     log('HephAIstus extension activated successfully.');

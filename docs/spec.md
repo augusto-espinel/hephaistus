@@ -1,6 +1,6 @@
 # HephAIstus - VS Code Extension Specification
 
-For vision and use cases, see [vision.md](./vision.md). For architecture details, see [architecture.md](./architecture.md).
+For vision and use cases, see [vision.md](./vision.md). For architecture details, see [architecture.md](./architecture.md). For manual testing, see [TEST-MANUAL-ROUNDTRIP.md](./TEST-MANUAL-ROUNDTRIP.md).
 
 ## Executive Summary
 
@@ -8,12 +8,23 @@ HephAIstus is a VS Code extension bridging KiCad schematic design with Python/SP
 
 The system operates across three pillars:
 1. **Schematic** (`.kicad_sch`) — Human's source of truth; geometry is immutable
-2. **JSON State** (`state.json`) — Machine-readable ledger for LLM reasoning
+2. **JSON State** (`.hephaistus/*.json`) — Machine-readable ledger for LLM reasoning
 3. **Code** (Python/SKiDL) — Simulation catalyst for iterative optimization
 
 ---
 
-## Architecture Overview
+## Implementation Status Summary
+
+| Subsystem | Status | Notes |
+|-----------|--------|-------|
+| KiCad → JSON Parsing | ✅ Complete | Full component/net extraction |
+| JSON → KiCad Delta Apply | ✅ Complete | Value changes, component removal |
+| VS Code Extension | ✅ Complete | File watchers, sync panel |
+| Round-Trip Integration | ✅ Complete | Both directions working |
+| LLM Integration | 📝 Planned | SKiDL code generation |
+| SPICE Simulation | 📋 Planned | ngspice execution |
+
+---
 
 ### Extension Host Services
 
@@ -21,41 +32,36 @@ The extension runs in VS Code's Extension Host and provides:
 
 | Service | File | Status | Description |
 |---------|------|--------|-------------|
-| Extension Entry | `src/extension.ts` | ✅ Implemented | Command registration, file watcher setup |
-| Activation Handler | `src/extensionActivationHandler.ts` | ✅ Implemented | Wires orchestrator on activation |
-| Sync Orchestrator | `src/syncOrchestrator.ts` | ✅ Implemented | Coordinates ingestion and drift detection |
-| LLM Service | `src/llmService.ts` | ✅ Implemented | High-level LLM generation wrappers |
-| LLM Config | `src/llmConfig.ts` | ✅ Implemented | Ollama/OpenRouter backend configuration |
-| LLM Client Factory | `src/llmClientFactory.ts` | ✅ Implemented | Factory for LLM client instances |
+| Extension Entry | `src/extension.ts` | ✅ Complete | Command registration, file watcher setup |
+| Sync Orchestrator | `src/syncOrchestrator.ts` | ✅ Complete | Coordinates ingestion, delta apply, loop prevention |
+| State Manager | `src/stateManager.ts` | ✅ Complete | Project state persistence |
+| LLM Service | `src/llmService.ts` | ✅ Complete | High-level LLM generation wrappers |
+| LLM Config | `src/llmConfig.ts` | ✅ Complete | Ollama/OpenRouter backend configuration |
 
 ### Core Services (`src/services/`)
 
 | Service | File | Status | Description |
 |---------|------|--------|-------------|
-| Ingestion Service | `ingestionService.ts` | ✅ Implemented | KiCad → JSON ingestion with KiUtils fallback |
-| KiCad Parser Service | `kicadParserService.ts` | ✅ Implemented | Routes to KiUtils or mock parser |
-| KiUtils Adapter | `kicadKiutilsAdapter.ts` | ✅ Implemented | Python bridge for KiUtils parsing |
-| Patch Apply Service | `patchApplyService.ts` | ✅ Implemented | Deterministic patch application with logging |
-| Patch Utils | `patchUtils.ts` | ✅ Implemented | Unified diff parsing utilities |
-| Script Update Service | `scriptUpdateService.ts` | ✅ Implemented | LLM-driven Python script drift detection |
+| Ingestion Service | `ingestionService.ts` | ✅ Complete | KiCad → JSON ingestion via KiUtils |
+| Delta Apply Service | `deltaApplyService.ts` | ✅ Complete | JSON → KiCad delta application |
+| KiCad Parser Service | `kicadParserService.ts` | ✅ Complete | Routes to KiUtils parser |
+| KiUtils Adapter | `kicadKiutilsAdapter.ts` | ✅ Complete | Python bridge for KiUtils |
+| Patch Apply Service | `patchApplyService.ts` | ✅ Complete | Deterministic patch application |
 
 ### UI Components (`src/ui/`)
 
 | Component | File | Status | Description |
 |-----------|------|--------|-------------|
-| LLM Webview | `llmWebView.ts` | 🔶 Stub | Webview panel for LLM interaction |
-| Patch Viewer | `patchViewer.ts` | ✅ Implemented | Patch preview rendering |
-| LLM UI Controller | `llmUIController.ts` | 🔶 Stub | UI flow controller |
-| UI Bridge | `uiBridge.ts` | 🔶 Stub | Bridge between webview and extension |
+| Sync Panel | `syncPanel.ts` | ✅ Complete | Manual sync panel with status indicators |
+| LLM Webview | `llmWebView.ts` | 📝 Planned | Webview panel for LLM interaction |
+| Patch Viewer | `patchViewer.ts` | ✅ Complete | Patch preview rendering |
 
 ### Utilities (`src/`)
 
 | Utility | File | Status | Description |
 |---------|------|--------|-------------|
-| Core Utils | `utils.ts` | ✅ Implemented | File hashing, workspace paths |
-| Hephaistus Service | `hephaistusService.ts` | ✅ Implemented | State management, change detection |
-| Hephaistus Bridge | `hephaistusServiceBridge.ts` | ✅ Implemented | Bridge to orchestrator |
-| Orchestrator Wrapper | `hephaistusServiceOrchestratorWrapper.ts` | ✅ Implemented | Orchestrator wrapper |
+| Core Utils | `utils.ts` | ✅ Complete | File hashing, workspace paths |
+| Hephaistus Service | `hephaistusService.ts` | ✅ Complete | State management, change detection |
 
 ---
 

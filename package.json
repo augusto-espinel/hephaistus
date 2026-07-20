@@ -77,8 +77,48 @@
       {
         "command": "hephaistus.listBackups",
         "title": "HephAIstus: List Backups"
+      },
+      {
+        "command": "hephaistus.parseKicad",
+        "title": "HephAIstus: Parse KiCad → JSON"
+      },
+      {
+        "command": "hephaistus.applyDelta",
+        "title": "HephAIstus: Apply JSON → KiCad"
+      },
+      {
+        "command": "hephaistus.fullSync",
+        "title": "HephAIstus: Full Sync"
+      },
+      {
+        "command": "hephaistus.refreshSyncPanel",
+        "title": "HephAIstus: Refresh Sync Panel"
       }
     ],
+    "views": {
+      "explorer": [
+        {
+          "id": "hephaistus-sync-panel",
+          "name": "HephAIstus Sync",
+          "when": "workspaceFolderCount > 0"
+        }
+      ],
+      "hephaistus.activitybar": [
+        {
+          "id": "hephaistus.sidebar",
+          "name": "Project Explorer"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "hephaistus.refreshSyncPanel",
+          "when": "view == hephaistus-sync-panel",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "HephAIstus",
       "properties": {
@@ -195,14 +235,6 @@
           "id": "hephaistus.activitybar",
           "title": "HephAIstus",
           "icon": "architect.svg"
-        }
-      ]
-    },
-    "views": {
-      "hephaistus.activitybar": [
-        {
-          "id": "hephaistus.sidebar",
-          "name": "Project Explorer"
         }
       ]
     }
