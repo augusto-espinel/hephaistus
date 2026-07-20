@@ -65,12 +65,36 @@ hephaistus/
 └── tests/                  # Test suites
 ```
 
-## Current Status
+## Current Status (2026-07-20)
 
-- **Restructure:** ✅ Complete (2026-07-15)
-- **New code:** ✅ Compiles correctly
-- **Pre-existing code:** ⚠️ 33 TypeScript errors — reference only, not production-ready
-- **Python package:** Structure ready, dependencies defined
+### Working ✅
+
+- Extension activation
+- File watcher detection
+- Python/KiUtils path resolution
+- KiCad 10 parsing
+- JSON state generation
+- State file tracking
+- TypeScript compilation (0 errors)
+
+### Known Limitations
+
+- Component `reference`, `value`, `footprint` fields are empty (kiutils stores these in `symbolInstances`/properties, not `schematicSymbols`)
+- LLM integration not yet wired
+- Simulation module (SKiDL/ngspice) not implemented
+
+### Last Milestone
+
+**KiCad Ingestion Working (2026-07-18)**: End-to-end parsing from `.kicad_sch` → KiUtils parser → JSON state. Test: `rectifier.kicad_sch` (9 components, 5 nets) parsed successfully.
+
+## Development Commands
+
+```bash
+npm run build      # Build TypeScript
+npm run watch      # Watch mode
+npm run package    # Package extension
+npm run test       # Run tests
+```
 
 ## Development Philosophy
 
@@ -97,6 +121,13 @@ Read hephaistus/CONTEXT.md, then read docs/vision.md, docs/architecture.md, and 
 **GitHub:** https://github.com/augusto-espinel/hephaistus
 
 The codebase is versioned and pushed to GitHub. Contributors can clone and follow this context file to get up to speed.
+
+## Next Steps (Priority Order)
+
+1. **Continue TEST-PLAN.md** — Sections 4-7 (Python bridge, LLM integration, patch application, UI)
+2. **Enhance component extraction** — Pull reference/value/footprint from `symbolInstances`
+3. **Test full workflow** — End-to-end with simulation
+4. **Wire LLM integration** — Connect optimization model to ingestion
 
 ## Notes for AI
 
