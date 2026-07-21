@@ -291,8 +291,209 @@ def apply_value_changes_text(content: str, value_changes: List[Dict[str, Any]]) 
     return content, changes_applied
 
 
+def extract_pin_positions_from_symbol(symbol_block: str) -> List[Tuple[float, float]]:
+    """
+    Extract pin positions from a symbol block.
+    
+    Pin positions in schematic symbols are relative to the symbol position.
+    Returns list of (x, y) tuples for each pin.
+    """
+    pins = []
+    
+    # Find all pins in the symbol block
+    # Pin format in KiCad 10: (pin ... (at x y angle) ...)
+    # We need to find the pin positions relative to symbol origin
+    
+    # Pattern to find pin blocks with position
+    pin_pattern = r'\(pin\s+[^)]*\(at\s+([\d.\-]+)\s+([\d.\-]+)\s+[\d.\-]+\)'
+    
+    for match in re.finditer(pin_pattern, symbol_block):
+        x = float(match.group(1))
+        y = float(match.group(2))
+        pins.append((x, y))
+    
+    return pins
+
+
+def extract_symbol_position(symbol_block: str) -> Optional[Tuple[float, float]]:
+    """
+    Extract the symbol position from its block.
+    
+    Returns (x, y) or None if not found.
+    """
+    # Pattern: (at x y angle) at the symbol level
+    # The symbol has a position attribute
+    at_pattern = r'\(at\s+([\d.\-]+)\s+([\d.\-]+)\s+[\d.\-]+\)'
+    match = re.search(at_pattern, symbol_block)
+    if match:
+        return (float(match.group(1)), float(match.group(2)))
+    return None
+
+
+def find_wire_blocks(content: str) -> List[Tuple[int, int, str, List[Tuple[float, float]]]]:
+    """
+    Find all wire blocks in the schematic.
+    
+    Returns list of (start_pos, end_pos, block_text, points).
+    """
+    wires = []
+    
+    # Pattern to find wire blocks
+    # (wire (pts (xy x1 y1) (xy x2 y2)) ...)
+    wire_pattern = r'\(wire\s+\(pts\s+((?:\(xy\s+[\d.\-]+\s+[\d.\-]+\)\s*)+)\)'
+    
+    for match in re.finditer(wire_pattern, content):
+        # Find the complete wire block (balanced parentheses)
+        start = match.start()
+        depth = 0
+        end = start
+        for i in range(start, len(content)):
+            if content[i] == '(':
+                depth += 1
+            elif content[i] == ')':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        
+        block = content[start:end]
+        
+        # Extract points
+        points = []
+        point_pattern = r'\(xy\s+([\d.\-]+)\s+([\d.\-]+)\)'
+        for pt_match in re.finditer(point_pattern, block):
+            x = float(pt_match.group(1))
+            y = float(pt_match.group(2))
+            points.append((x, y))
+        
+        wires.append((start, end, block, points))
+    
+    return wires
+
+
+def find_junction_blocks(content: str) -> List[Tuple[int, int, str, Tuple[float, float]]]:
+    """
+    Find all junction blocks in the schematic.
+    
+    Returns list of (start_pos, end_pos, block_text, position).
+    """
+    junctions = []
+    
+    # Pattern to find junction blocks
+    # (junction (at x y) ...)
+    junction_pattern = r'\(junction\s+\(at\s+([\d.\-]+)\s+([\d.\-]+)\)'
+    
+    for match in re.finditer(junction_pattern, content):
+        # Find the complete junction block
+        start = match.start()
+        depth = 0
+        end = start
+        for i in range(start, len(content)):
+            if content[i] == '(':
+                depth += 1
+            elif content[i] == ')':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        
+        block = content[start:end]
+        x = float(match.group(1))
+        y = float(match.group(2))
+        
+        junctions.append((start, end, block, (x, y)))
+    
+    return junctions
+
+
+def apply_component_removal_text(content: str, removed_components: List[Dict[str, Any]], 
+                                  original_json: Dict[str, Any]) -> Tuple[str, List[str]]:
+    """
+    Remove components using text-based editing.
+    
+    Also removes orphaned wires and junctions connected only to removed components.
+    
+    Returns (modified_content, list_of_changes_applied).
+    """
+    changes_applied = []
+    
+    # Build a map of component UUIDs to their pin positions from original JSON
+    comp_pin_positions = {}
+    for comp in original_json.get('components', []):
+        comp_uuid = comp['uuid']
+        pins = comp.get('pins', [])
+        pin_positions = [(p['position']['x'], p['position']['y']) for p in pins]
+        comp_pin_positions[comp_uuid] = pin_positions
+    
+    # Collect all pin positions from removed components
+    removed_pin_positions = set()
+    
+    for change in removed_components:
+        uuid = change['uuid']
+        reference = change.get('reference', 'unknown')
+        
+        # Find the symbol block
+        result = find_symbol_block(content, uuid)
+        if result is None:
+            changes_applied.append(f"WARNING: Could not find symbol {reference} ({uuid})")
+            continue
+        
+        start_pos, end_pos, symbol_block = result
+        
+        # Get pin positions from JSON (more reliable than parsing symbol)
+        if uuid in comp_pin_positions:
+            for pos in comp_pin_positions[uuid]:
+                # Round to 2 decimal places for matching
+                removed_pin_positions.add((round(pos[0], 2), round(pos[1], 2)))
+        
+        # Remove the symbol block
+        content = content[:start_pos] + content[end_pos:]
+        changes_applied.append(f"Removed {reference}")
+    
+    # Find and remove orphaned wires
+    # A wire is orphaned if ALL its endpoints are at removed pin positions
+    wires = find_wire_blocks(content)
+    orphan_wires = []
+    
+    # Sort by position descending (remove from end to preserve positions)
+    for start, end, block, points in sorted(wires, key=lambda w: w[0], reverse=True):
+        # Check if all wire endpoints are at removed pin positions
+        all_orphan = all(
+            (round(pt[0], 2), round(pt[1], 2)) in removed_pin_positions
+            for pt in points
+        )
+        if all_orphan:
+            orphan_wires.append((start, end))
+    
+    # Remove orphaned wires (from end to preserve positions)
+    for start, end in orphan_wires:
+        content = content[:start] + content[end:]
+    
+    if orphan_wires:
+        changes_applied.append(f"Removed {len(orphan_wires)} orphan wire(s)")
+    
+    # Find and remove orphaned junctions at removed pin positions
+    junctions = find_junction_blocks(content)
+    orphan_junctions = []
+    
+    for start, end, block, pos in sorted(junctions, key=lambda j: j[0], reverse=True):
+        pos_rounded = (round(pos[0], 2), round(pos[1], 2))
+        if pos_rounded in removed_pin_positions:
+            orphan_junctions.append((start, end))
+    
+    # Remove orphaned junctions
+    for start, end in orphan_junctions:
+        content = content[:start] + content[end:]
+    
+    if orphan_junctions:
+        changes_applied.append(f"Removed {len(orphan_junctions)} orphan junction(s)")
+    
+    return content, changes_applied
+
+
 def apply_delta_to_schematic(schematic_path: str, delta: Dict[str, Any], 
-                             output_path: Optional[str] = None) -> bool:
+                             output_path: Optional[str] = None,
+                             original_json: Optional[Dict[str, Any]] = None) -> bool:
     """
     Apply delta changes to KiCad schematic file using TEXT-BASED editing.
     
@@ -302,6 +503,7 @@ def apply_delta_to_schematic(schematic_path: str, delta: Dict[str, Any],
         schematic_path: Path to .kicad_sch file
         delta: Delta object from compute_delta()
         output_path: Optional output path (default: overwrite original)
+        original_json: Original JSON (needed for component removal to get pin positions)
     
     Returns:
         True if successful, False otherwise
@@ -318,9 +520,15 @@ def apply_delta_to_schematic(schematic_path: str, delta: Dict[str, Any],
             content, value_changes = apply_value_changes_text(content, delta['value_changes'])
             changes_applied.extend(value_changes)
         
-        # 2. Handle removed components (TODO: implement text-based removal)
-        for change in delta.get('removed_components', []):
-            changes_applied.append(f"TODO: Remove {change['reference']} (not implemented)")
+        # 2. Handle removed components (text-based removal)
+        if delta.get('removed_components'):
+            if original_json is None:
+                changes_applied.append("WARNING: original_json required for component removal")
+            else:
+                content, removal_changes = apply_component_removal_text(
+                    content, delta['removed_components'], original_json
+                )
+                changes_applied.extend(removal_changes)
         
         # 3. Handle added components (TODO: implement text-based addition)
         for comp in delta.get('added_components', []):
@@ -383,8 +591,8 @@ def main():
         }))
         sys.exit(0)
     
-    # Apply delta
-    success = apply_delta_to_schematic(kicad_path, delta)
+    # Apply delta (pass original JSON for component removal)
+    success = apply_delta_to_schematic(kicad_path, delta, original_json=original)
     
     if success:
         # Return summary

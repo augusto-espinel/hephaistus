@@ -155,7 +155,7 @@ sim_params = props.get('Sim.Params', '')    # "dc=0 ampl=10 f=50 ac=0"
 | Operation | Status | Description |
 |-----------|--------|-------------|
 | Value changes | ✅ Complete | Modifies `Value` property, preserves geometry |
-| Component removal | ✅ Complete | Removes symbol, cleans orphan wires/junctions |
+| Component removal | ✅ Complete | Removes symbol, preserves connected wires/junctions |
 | Component addition | 📝 Planned | Requires library symbol lookup |
 | Connection changes | 📝 Planned | Creates stub markers |
 

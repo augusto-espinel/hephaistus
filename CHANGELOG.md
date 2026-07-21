@@ -30,6 +30,13 @@
   - Only the exact Value string is modified, preserving all other formatting
   - File line count preserved (2126 lines before/after delta apply)
 
+### Added (after initial release)
+- **Component removal** - Text-based removal of components from schematic:
+  - Finds symbol block by UUID and removes it
+  - Preserves wires that connect to other components
+  - Only removes wires/junctions that are truly orphaned (both endpoints at removed pins)
+  - KiCad 10 properties preserved throughout removal
+
 ### Removed
 - **Full Sync button** - Workflow is one-way-at-a-time, not circular
 
