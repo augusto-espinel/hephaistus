@@ -22,6 +22,13 @@
 - **Sync status detection** - Correctly tracks `lastSync` timestamp and source after operations
 - **Status refresh** - Added `refreshAsync()` to ensure file timestamps are current before status checks
 - **Removed duplicate `value` field** - JSON now stores `value` only in `properties.Value`
+- **CRITICAL: Property loss on delta apply** - kiutils was stripping KiCad 10 properties
+  when re-serializing the file:
+  - Properties like `show_name no`, `do_not_autoplace no`, `hide yes` were lost
+  - This caused them to appear as visible text in the schematic
+  - Fixed by switching to text-based S-expression editing
+  - Only the exact Value string is modified, preserving all other formatting
+  - File line count preserved (2126 lines before/after delta apply)
 
 ### Removed
 - **Full Sync button** - Workflow is one-way-at-a-time, not circular

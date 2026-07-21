@@ -163,10 +163,26 @@ sim_params = props.get('Sim.Params', '')    # "dc=0 ampl=10 f=50 ac=0"
 
 **Location:** `scripts/wrappers/kiutils_delta_apply.py`
 
+**IMPORTANT:** Uses **text-based editing** to preserve all KiCad 10 properties.
+
+The script reads the `.kicad_sch` file as text, finds the symbol by UUID,
+locates the `Value` property S-expression, and replaces only the value string.
+This preserves all KiCad formatting including:
+
+- `(show_name no)`
+- `(do_not_autoplace no)`
+- `(hide yes)`
+- All other KiCad 10 properties
+
 ```bash
 python scripts/wrappers/kiutils_delta_apply.py \
     original.json modified.json circuit.kicad_sch
 ```
+
+**Why text-based?** The `kiutils` library doesn't fully support KiCad 10 properties.
+When it reads and re-serializes a file, it strips properties it doesn't understand,
+causing values like `show_name` to appear as visible text in the schematic.
+Text-based editing avoids this by only modifying the exact value that changed.
 
 ### 4.3 Delta Types
 

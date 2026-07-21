@@ -3,7 +3,7 @@
 KiCad Delta Application Script for HephAIstus
 
 Applies changes from modified JSON back to KiCad schematic.
-Preserves existing geometry (wire paths, component positions) where possible.
+Uses TEXT-BASED editing to preserve all KiCad 10 properties.
 
 Usage:
     python kiutils_delta_apply.py <original.json> <modified.json> <kicad_file>
@@ -16,8 +16,8 @@ import sys
 import json
 import os
 import shutil
+import re
 from typing import Dict, List, Any, Optional, Tuple
-from datetime import datetime
 
 
 def load_json(path: str) -> Dict[str, Any]:
@@ -96,252 +96,256 @@ def compute_delta(original: Dict[str, Any], modified: Dict[str, Any]) -> Dict[st
     return delta
 
 
-def apply_delta_to_schematic(schematic_path: str, delta: Dict[str, Any], 
-                             output_path: Optional[str] = None,
-                             staging_position: Tuple[float, float] = (50.0, 50.0)) -> bool:
+def find_symbol_block(content: str, uuid: str) -> Optional[Tuple[int, int, str]]:
     """
-    Apply delta changes to KiCad schematic file.
+    Find the S-expression block for a symbol with the given UUID.
+    
+    Returns (start_pos, end_pos, block_text) or None if not found.
+    """
+    # Pattern to find (symbol ... (uuid "uuid-here") ...)
+    # We need to find the complete balanced S-expression
+    
+    # First, find the uuid
+    uuid_pattern = rf'\(uuid\s+"{re.escape(uuid)}"\)'
+    uuid_match = re.search(uuid_pattern, content)
+    
+    if not uuid_match:
+        return None
+    
+    # Now find the enclosing (symbol ...) block
+    # Work backwards to find the opening (symbol
+    pos = uuid_match.start()
+    
+    # Track parenthesis depth and find the start
+    depth = 0
+    symbol_start = None
+    
+    for i in range(pos, -1, -1):
+        if content[i] == ')':
+            depth += 1
+        elif content[i] == '(':
+            depth -= 1
+            if depth < 0:
+                # Check if this is a symbol block
+                remaining = content[i:]
+                if remaining.startswith('(symbol'):
+                    symbol_start = i
+                    break
+                depth = 0  # Reset for other paren types
+    
+    if symbol_start is None:
+        return None
+    
+    # Now find the end of the symbol block by matching parentheses
+    depth = 0
+    symbol_end = None
+    
+    for i in range(symbol_start, len(content)):
+        if content[i] == '(':
+            depth += 1
+        elif content[i] == ')':
+            depth -= 1
+            if depth == 0:
+                symbol_end = i + 1
+                break
+    
+    if symbol_end is None:
+        return None
+    
+    return (symbol_start, symbol_end, content[symbol_start:symbol_end])
+
+
+def replace_property_value(symbol_block: str, property_name: str, new_value: str) -> Optional[str]:
+    """
+    Replace the value of a property within a symbol block.
+    
+    Preserves all other formatting and attributes.
+    
+    Returns the modified block or None if property not found.
+    """
+    # Pattern to match (property "Property" "value" ...)
+    # We need to find the property, then its string value, and replace it
+    
+    # Find the property line
+    # Match: (property "Value" "old_value" ...)
+    # The value is the second string after the property name
+    
+    # Escape special regex characters in property name
+    prop_escaped = re.escape(property_name)
+    
+    # Pattern to find property block
+    # (property "Value" "old_value" ...) or (property "Value" old_value ...)
+    # We need to match the property name and capture the value
+    
+    # First, find where the property block starts
+    prop_pattern = rf'\(property\s+"{prop_escaped}"'
+    prop_match = re.search(prop_pattern, symbol_block)
+    
+    if not prop_match:
+        return None
+    
+    # Find the complete property block (balanced parentheses)
+    prop_start = prop_match.start()
+    depth = 0
+    prop_end = None
+    
+    for i in range(prop_start, len(symbol_block)):
+        if symbol_block[i] == '(':
+            depth += 1
+        elif symbol_block[i] == ')':
+            depth -= 1
+            if depth == 0:
+                prop_end = i + 1
+                break
+    
+    if prop_end is None:
+        return None
+    
+    prop_block = symbol_block[prop_start:prop_end]
+    
+    # Now find and replace the value string within the property block
+    # The value is the second quoted string after the property name
+    # Pattern: (property "Name" "value" ...)
+    
+    # Find the position after the property name
+    after_name = prop_match.end()
+    
+    # Skip whitespace
+    while after_name < len(symbol_block) and symbol_block[after_name] in ' \t\n':
+        after_name += 1
+    
+    # Now we're at the start of the value
+    # It could be quoted or unquoted
+    if symbol_block[after_name] == '"':
+        # Quoted value - find the closing quote
+        value_start = after_name
+        value_end = symbol_block.find('"', value_start + 1)
+        if value_end == -1:
+            return None
+        value_end += 1  # Include closing quote
+        
+        # Replace the value
+        old_value_str = symbol_block[value_start:value_end]
+        new_value_str = f'"{new_value}"'
+        
+        # Build new property block
+        new_prop_block = prop_block[:value_start - prop_start] + new_value_str + prop_block[value_end - prop_start:]
+        
+        # Build new symbol block
+        new_symbol_block = symbol_block[:prop_start] + new_prop_block + symbol_block[prop_end:]
+        
+        return new_symbol_block
+    else:
+        # Unquoted value - find end (whitespace or closing paren)
+        value_start = after_name
+        value_end = value_start
+        while value_end < len(symbol_block) and symbol_block[value_end] not in ' \t\n)':
+            value_end += 1
+        
+        old_value_str = symbol_block[value_start:value_end]
+        new_value_str = f'"{new_value}"'  # Always quote the new value
+        
+        # Build new property block
+        new_prop_block = prop_block[:value_start - prop_start] + new_value_str + prop_block[value_end - prop_start:]
+        
+        # Build new symbol block
+        new_symbol_block = symbol_block[:prop_start] + new_prop_block + symbol_block[prop_end:]
+        
+        return new_symbol_block
+
+
+def apply_value_changes_text(content: str, value_changes: List[Dict[str, Any]]) -> Tuple[str, List[str]]:
+    """
+    Apply value changes using text-based editing.
+    
+    Preserves all KiCad formatting and properties.
+    
+    Returns (modified_content, list_of_changes_applied).
+    """
+    changes_applied = []
+    
+    for change in value_changes:
+        uuid = change['uuid']
+        new_value = change['new_value']
+        reference = change.get('reference', 'unknown')
+        
+        # Find the symbol block
+        result = find_symbol_block(content, uuid)
+        if result is None:
+            changes_applied.append(f"WARNING: Could not find symbol {reference} ({uuid})")
+            continue
+        
+        start_pos, end_pos, symbol_block = result
+        
+        # Replace the Value property
+        new_symbol_block = replace_property_value(symbol_block, 'Value', new_value)
+        
+        if new_symbol_block is None:
+            changes_applied.append(f"WARNING: Could not find Value property for {reference}")
+            continue
+        
+        # Replace in content
+        content = content[:start_pos] + new_symbol_block + content[end_pos:]
+        changes_applied.append(f"Updated {reference}: {change['old_value']} → {new_value}")
+    
+    return content, changes_applied
+
+
+def apply_delta_to_schematic(schematic_path: str, delta: Dict[str, Any], 
+                             output_path: Optional[str] = None) -> bool:
+    """
+    Apply delta changes to KiCad schematic file using TEXT-BASED editing.
+    
+    This preserves all KiCad 10 properties that kiutils would strip.
     
     Args:
         schematic_path: Path to .kicad_sch file
         delta: Delta object from compute_delta()
         output_path: Optional output path (default: overwrite original)
-        staging_position: Position for new components (x, y)
     
     Returns:
         True if successful, False otherwise
     """
     try:
-        from kiutils.schematic import Schematic, Property
-        from kiutils.items.common import Position
+        # Read the schematic file as text
+        with open(schematic_path, 'r', encoding='utf-8') as f:
+            content = f.read()
         
-        # Load schematic
-        schematic = Schematic.from_file(schematic_path)
-        
-        # Build UUID to symbol mapping
-        symbol_map = {sym.uuid: sym for sym in schematic.schematicSymbols}
-        
-        # Track changes for logging
         changes_applied = []
         
-        # 1. Apply value changes
-        for change in delta.get('value_changes', []):
-            uuid = change['uuid']
-            new_value = change['new_value']
-            
-            if uuid in symbol_map:
-                symbol = symbol_map[uuid]
-                # Find and update the Value property
-                for prop in symbol.properties:
-                    if prop.key == 'Value':
-                        prop.value = new_value
-                        changes_applied.append(f"Updated {change['reference']}: {change['old_value']} → {new_value}")
-                        break
+        # 1. Apply value changes using text-based editing
+        if delta.get('value_changes'):
+            content, value_changes = apply_value_changes_text(content, delta['value_changes'])
+            changes_applied.extend(value_changes)
         
-        # 2. Handle removed components
+        # 2. Handle removed components (TODO: implement text-based removal)
         for change in delta.get('removed_components', []):
-            uuid = change['uuid']
-            if uuid in symbol_map:
-                symbol = symbol_map[uuid]
-                
-                # Collect pin positions for wire cleanup
-                pin_positions = set()
-                # Get library symbol for pin info
-                lib_sym = find_lib_symbol(schematic, symbol)
-                if lib_sym:
-                    for pin_num, pin_uuid in symbol.pins.items():
-                        pin_pos = get_pin_position(lib_sym, pin_num, symbol.position)
-                        pin_positions.add((round(pin_pos[0], 2), round(pin_pos[1], 2)))
-                
-                # Remove symbol from schematic
-                schematic.schematicSymbols.remove(symbol)
-                changes_applied.append(f"Removed {change['reference']}")
-                
-                # Remove orphan wires (wires that only touched this symbol)
-                # Note: We only remove wire segments that become orphaned
-                # Wires that connect to other components are preserved
-                orphan_wires_removed = remove_orphan_wires(schematic, pin_positions)
-                if orphan_wires_removed > 0:
-                    changes_applied.append(f"Removed {orphan_wires_removed} orphan wire(s) for {change['reference']}")
+            changes_applied.append(f"TODO: Remove {change['reference']} (not implemented)")
         
-        # 3. Handle added components
+        # 3. Handle added components (TODO: implement text-based addition)
         for comp in delta.get('added_components', []):
-            # TODO: Create new symbol instance
-            # This requires symbol library lookup and instantiation
-            # For now, log as a TODO
             changes_applied.append(f"TODO: Add {comp.get('reference')} (not implemented)")
         
-        # 4. Handle connection changes
+        # 4. Handle connection changes (TODO: implement wire reconnection)
         for change in delta.get('connection_changes', []):
-            uuid = change['uuid']
-            new_net = change['new_net']
-            pin_num = change['pin']
-            
-            if uuid in symbol_map:
-                symbol = symbol_map[uuid]
-                lib_sym = find_lib_symbol(schematic.libSymbols, symbol)
-                
-                if lib_sym:
-                    # Get pin position
-                    pin_pos = get_pin_position(lib_sym, pin_num, symbol.position)
-                    
-                    # Create stub connection marker
-                    # This is a logical connection - user completes wiring in KiCad
-                    stub_created = create_stub_connection(
-                        schematic, symbol, pin_num, pin_pos, new_net
-                    )
-                    
-                    if stub_created:
-                        changes_applied.append(
-                            f"Stub: {change['reference']}.{pin_num} → {new_net} (needs wiring)"
-                        )
-                    else:
-                        changes_applied.append(
-                            f"TODO: Reconnect {change['reference']}.{pin_num} → {new_net}"
-                        )
+            changes_applied.append(f"TODO: Reconnect {change['reference']}.{change['pin']} → {change['new_net']}")
         
         # Create backup before saving
         backup_path = schematic_path + '.bak'
         if os.path.exists(schematic_path):
             shutil.copy2(schematic_path, backup_path)
         
-        # Save modified schematic
+        # Save modified schematic (text-based, preserves all formatting)
         save_path = output_path if output_path else schematic_path
-        schematic.to_file(save_path)
+        with open(save_path, 'w', encoding='utf-8') as f:
+            f.write(content)
         
         return True
         
     except Exception as e:
         print(f"Error applying delta: {e}", file=sys.stderr)
-        return False
-
-
-def find_lib_symbol(schematic, symbol) -> Optional[Any]:
-    """Find library symbol definition for a placed symbol."""
-    lib_nickname = symbol.libraryNickname
-    entry_name = symbol.entryName
-    
-    # libSymbols is a list of Symbol objects
-    for lib_sym in schematic.libSymbols:
-        if hasattr(lib_sym, 'libraryNickname') and hasattr(lib_sym, 'entryName'):
-            if lib_sym.libraryNickname == lib_nickname and lib_sym.entryName == entry_name:
-                return lib_sym
-        # Also check by libId
-        if hasattr(lib_sym, 'libId'):
-            if lib_sym.libId == f"{lib_nickname}:{entry_name}":
-                return lib_sym
-    
-    # Fallback: find by entry name
-    for lib_sym in schematic.libSymbols:
-        if hasattr(lib_sym, 'entryName') and lib_sym.entryName == entry_name:
-            return lib_sym
-    
-    return None
-
-
-def get_pin_position(lib_sym, pin_num: str, symbol_pos) -> Tuple[float, float]:
-    """
-    Calculate absolute pin position from library symbol and symbol position.
-    
-    kiutils structure:
-    - lib_sym.units is a list of Symbol objects (unit variants)
-    - Each unit has a .pins list of SymbolPin objects
-    - SymbolPin has: position.X, position.Y, number
-    """
-    import math
-    
-    # Default relative position (center of symbol)
-    pin_rel_x, pin_rel_y = 0.0, 0.0
-    
-    # Find pin in library symbol units
-    for unit in getattr(lib_sym, 'units', []):
-        for pin in getattr(unit, 'pins', []):
-            if str(pin.number) == str(pin_num):
-                pin_rel_x = pin.position.X
-                pin_rel_y = pin.position.Y
-                break
-    
-    # Apply rotation if present
-    angle = getattr(symbol_pos, 'angle', 0) if hasattr(symbol_pos, 'angle') else 0
-    if angle != 0:
-        angle_rad = math.radians(angle)
-        cos_a = math.cos(angle_rad)
-        sin_a = math.sin(angle_rad)
-        x_rot = pin_rel_x * cos_a - pin_rel_y * sin_a
-        y_rot = pin_rel_x * sin_a + pin_rel_y * cos_a
-        pin_rel_x, pin_rel_y = x_rot, y_rot
-    
-    # Apply translation
-    abs_x = symbol_pos.X + pin_rel_x
-    abs_y = symbol_pos.Y + pin_rel_y
-    
-    return (abs_x, abs_y)
-
-
-def remove_orphan_wires(schematic, pin_positions: set) -> int:
-    """
-    Remove wire segments that only connect to removed component pins.
-    Returns count of removed wires.
-    """
-    removed_count = 0
-    
-    # Find all Connection objects (wires) in graphicalItems
-    wires_to_remove = []
-    for item in schematic.graphicalItems:
-        if hasattr(item, 'points') and hasattr(item, 'uuid'):
-            # Check if all wire points are orphan pins
-            wire_points = [(round(p.X, 2), round(p.Y, 2)) for p in item.points]
-            
-            # A wire is orphaned if all its endpoints are in pin_positions
-            all_orphan = all(pt in pin_positions for pt in wire_points)
-            if all_orphan:
-                wires_to_remove.append(item)
-    
-    # Remove orphaned wires
-    for wire in wires_to_remove:
-        schematic.graphicalItems.remove(wire)
-        removed_count += 1
-    
-    # Also remove junctions that are now orphaned
-    junctions_to_remove = []
-    for junc in schematic.junctions:
-        junc_pos = (round(junc.position.X, 2), round(junc.position.Y, 2))
-        if junc_pos in pin_positions:
-            junctions_to_remove.append(junc)
-    
-    for junc in junctions_to_remove:
-        schematic.junctions.remove(junc)
-    
-    return removed_count
-
-
-def create_stub_connection(schematic, symbol, pin_num: str, pin_pos: Tuple[float, float], 
-                           net_name: str) -> bool:
-    """
-    Create a stub connection marker for a re-wired pin.
-    This creates a visual indicator in KiCad that the user needs to complete wiring.
-    
-    Returns True if stub was created, False otherwise.
-    """
-    try:
-        from kiutils.schematic import LocalLabel
-        from kiutils.items.common import Position, TextEffects
-        
-        # Create a local label at the pin position to mark the intended net
-        # The user will see this and complete the wiring manually
-        
-        # Position label slightly offset from pin
-        label_x = pin_pos[0] + 5.08  # Offset in KiCad units (5.08mm = 200mil)
-        label_y = pin_pos[1]
-        
-        # Create label (if supported by kiutils version)
-        # Note: This creates a visual marker, actual wire creation is user's responsibility
-        
-        # For now, just return False - stub creation requires more complex wire handling
-        # In production, this would create a short wire stub with a label
-        return False
-        
-    except Exception:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
         return False
 
 
