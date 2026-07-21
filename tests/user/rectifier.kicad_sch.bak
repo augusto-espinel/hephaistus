@@ -450,7 +450,7 @@
     (property "Reference" "R2" (at 147.32 69.8499 0) (show_name)
       (effects (font (size 1.27 1.27)) (justify left))
     )
-    (property "Value" "10" (at 147.32 72.3899 0) (show_name)
+    (property "Value" "33" (at 147.32 72.3899 0) (show_name)
       (effects (font (size 1.27 1.27)) (justify left))
     )
     (property "Footprint" "" (at 143.002 71.12 90) (show_name)

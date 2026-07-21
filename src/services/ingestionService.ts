@@ -1,13 +1,5 @@
-/**
- * Adds core logic for running the Ingestion Phase (KiCad -> JSON).
- * This function should be called when the user manually triggers ingestion after detection.
- *
- * @param {string} kicadFilePath - Absolute path to the .kicad_sch file.
- * @param {ProjectState} currentState - The current project state object to modify.
- * @returns {Promise<{success: boolean, message: string}>} Result of the ingestion attempt.
- */
-
 import * as path from 'path';
+import * as fs from 'fs';
 import { WORKSPACE_ROOT, KICAD_EXT, JSON_EXT, writeToFile, generateFileHash, calculateSemanticKicadHash } from '../utils';
 import { llmGenerateSync } from '../llmService';
 import { parseKiCadToJson } from './kicadParserService';
@@ -76,6 +68,18 @@ export async function executeIngestionPhase(kicadFilePath: string, state: any) {
     // 3. Persist JSON content to disk in .hephaistus directory
     const jsonFilePath = path.join(workspaceRoot, '.hephaistus', correspondingJsonName);
     await writeToFile(jsonFilePath, jsonContentToPersist);
+    
+    // 3b. Create baseline for delta comparison (used when applying JSON changes back to KiCad)
+    // Use .original.json suffix to avoid collision with {name}_backup.json from {name}_backup.kicad_sch
+    const baselinePath = path.join(workspaceRoot, '.hephaistus', correspondingJsonName.replace('.json', '.original.json'));
+    try {
+      await writeToFile(baselinePath, jsonContentToPersist);
+      console.log(`[Ingestion] Created baseline for delta comparison: ${baselinePath}`);
+      // Note: We don't track baseline files in state.files.json - they're internal
+    } catch (baselineErr) {
+      console.warn('[Ingestion] Failed to create baseline file:', baselineErr);
+      // Non-fatal - continue without baseline
+    }
     
     // Track the JSON file
     if (!state.files.json.includes(correspondingJsonName)) {

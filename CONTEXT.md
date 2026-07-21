@@ -65,7 +65,7 @@ hephaistus/
 └── tests/                  # Test suites
 ```
 
-## Current Status (2026-07-20)
+## Current Status (2026-07-21)
 
 ### Working ✅
 
@@ -76,6 +76,16 @@ hephaistus/
 - JSON state generation
 - State file tracking
 - TypeScript compilation (0 errors)
+- **Manual sync workflow**:
+  - Parse KiCad → JSON (one-way)
+  - Apply JSON → KiCad (one-way)
+- **Sync status detection**:
+  - Tracks last sync timestamp and source
+  - Detects KiCad vs JSON newer states
+  - Visual indicators (🔴/🔵/🟢)
+- **Recommended action highlighting**
+- **Confirmation dialogs** for destructive operations
+- **Restore from JSON** - Discard KiCad changes option
 
 ### Known Limitations
 
@@ -85,7 +95,7 @@ hephaistus/
 
 ### Last Milestone
 
-**KiCad Ingestion Working (2026-07-18)**: End-to-end parsing from `.kicad_sch` → KiUtils parser → JSON state. Test: `rectifier.kicad_sch` (9 components, 5 nets) parsed successfully.
+**Manual Sync Workflow Complete (2026-07-21)**: Full bidirectional sync workflow with status detection, recommended action highlighting, and safety confirmation dialogs.
 
 ## Development Commands
 
@@ -124,10 +134,11 @@ The codebase is versioned and pushed to GitHub. Contributors can clone and follo
 
 ## Next Steps (Priority Order)
 
-1. **Continue TEST-PLAN.md** — Sections 4-7 (Python bridge, LLM integration, patch application, UI)
-2. **Enhance component extraction** — Pull reference/value/footprint from `symbolInstances`
-3. **Test full workflow** — End-to-end with simulation
-4. **Wire LLM integration** — Connect optimization model to ingestion
+1. **Enhance component extraction** — Pull reference/value/footprint from `symbolInstances` (currently only in `properties`)
+2. **Wire LLM integration** — Connect optimization model to ingestion
+3. **Continue TEST-PLAN.md** — Sections 4-7 (Python bridge, LLM integration, patch application, UI)
+4. **Test full workflow** — End-to-end with simulation
+5. **Document sync workflow** — Add user guide for manual sync process
 
 ## Notes for AI
 

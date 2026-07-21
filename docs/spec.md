@@ -44,9 +44,28 @@ The extension runs in VS Code's Extension Host and provides:
 |---------|------|--------|-------------|
 | Ingestion Service | `ingestionService.ts` | ✅ Complete | KiCad → JSON ingestion via KiUtils |
 | Delta Apply Service | `deltaApplyService.ts` | ✅ Complete | JSON → KiCad delta application |
+| State Manager | `stateManager.ts` | ✅ Complete | Project state with sync tracking |
 | KiCad Parser Service | `kicadParserService.ts` | ✅ Complete | Routes to KiUtils parser |
 | KiUtils Adapter | `kicadKiutilsAdapter.ts` | ✅ Complete | Python bridge for KiUtils |
 | Patch Apply Service | `patchApplyService.ts` | ✅ Complete | Deterministic patch application |
+
+### State Tracking
+
+The `ProjectState` interface tracks sync history:
+
+```typescript
+interface ProjectState {
+    // ... other fields ...
+    lastSync?: {
+        source: 'kicad' | 'json';
+        timestamp: string;
+        kicadHash?: string;  // Future: detect touch operations
+        jsonHash?: string;   // Future: verify round-trip integrity
+    };
+}
+```
+
+**Purpose:** Distinguish between "JSON newer after parse" (synced) vs "JSON newer after manual edit" (needs apply).
 
 ### UI Components (`src/ui/`)
 

@@ -231,7 +231,39 @@ To prevent infinite loops:
 
 **Mechanism:** `handleKicadChange()` ignores file changes if delta was applied recently.
 
-### 5.3 File Watcher Behavior
+### 5.3 Loop Prevention
+
+To prevent infinite loops:
+
+| Mechanism | Purpose |
+|-----------|---------|
+| `isApplyingDelta` flag | True while writing to KiCad |
+| `lastDeltaApplyTime` timestamp | Records last delta application |
+| `APPLIED_DELTA_TIMEOUT_MS` (5000ms) | Cooldown period |
+
+**Mechanism:** `handleKicadChange()` ignores file changes if delta was applied recently.
+
+### 5.4 Sync State Tracking
+
+The `ProjectState.lastSync` field tracks sync history:
+
+```typescript
+lastSync?: {
+    source: 'kicad' | 'json';  // Which file was the source
+    timestamp: string;          // ISO timestamp of last sync
+    kicadHash?: string;         // Hash of KiCad content (future use)
+    jsonHash?: string;          // Hash of JSON content (future use)
+}
+```
+
+**Current Use:** Timestamp-based sync detection
+
+**Future Use (Planned):**
+- Detect "touch" operations (file saved but content unchanged)
+- Verify round-trip integrity (KiCad → JSON → KiCad hash comparison)
+- Skip unnecessary re-parsing when hash unchanged
+
+### 5.5 File Watcher Behavior
 
 | Event | Action |
 |-------|--------|

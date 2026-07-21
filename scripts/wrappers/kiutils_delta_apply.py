@@ -53,13 +53,16 @@ def compute_delta(original: Dict[str, Any], modified: Dict[str, Any]) -> Dict[st
         if uuid in orig_comps:
             orig_comp = orig_comps[uuid]
             
-            # Check for value change
-            if orig_comp.get('value') != mod_comp.get('value'):
+            # Check for value change (properties.Value)
+            orig_value = orig_comp.get('properties', {}).get('Value', orig_comp.get('value', ''))
+            mod_value = mod_comp.get('properties', {}).get('Value', mod_comp.get('value', ''))
+            
+            if orig_value != mod_value:
                 delta['value_changes'].append({
                     'uuid': uuid,
                     'reference': mod_comp.get('reference'),
-                    'old_value': orig_comp.get('value'),
-                    'new_value': mod_comp.get('value')
+                    'old_value': orig_value,
+                    'new_value': mod_value
                 })
             
             # Check for connection changes

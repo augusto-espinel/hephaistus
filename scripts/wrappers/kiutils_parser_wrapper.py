@@ -257,7 +257,6 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                 "uuid": getattr(symbol, 'uuid', 'unknown'),
                 "reference": props.get('Reference', ''),
                 "libId": lib_id,
-                "value": props.get('Value', ''),
                 "footprint": props.get('Footprint', ''),
                 "position": position,
                 "properties": {

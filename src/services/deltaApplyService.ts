@@ -7,7 +7,72 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn } from 'child_process';
-import { WORKSPACE_ROOT } from '../utils';
+
+/**
+ * Find the HephAIstus project root by looking for package.json
+ * Uses multiple strategies: extension directory, process.cwd(), parent directories
+ */
+function findHephaistusRoot(): string | null {
+  // Strategy 1: Use __dirname (extension's compiled location)
+  // This file is at dist/services/deltaApplyService.js, so go up to project root
+  try {
+    const adapterDir = __dirname;
+    const servicesDir = path.dirname(adapterDir);
+    const srcDir = path.dirname(servicesDir);
+    const projectRoot = path.dirname(srcDir);
+    
+    // Check for package.json
+    const packageJsonPath = path.join(projectRoot, 'package.json');
+    if (fs.existsSync(packageJsonPath)) {
+      try {
+        const content = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+        if (content.name === 'hephaistus' || content.name?.includes('hephaistus')) {
+          return projectRoot;
+        }
+      } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+  
+  // Strategy 2: Walk up from cwd
+  let dir = process.cwd();
+  const maxDepth = 10;
+  
+  for (let i = 0; i < maxDepth; i++) {
+    const packageJson = path.join(dir, 'package.json');
+    if (fs.existsSync(packageJson)) {
+      try {
+        const content = JSON.parse(fs.readFileSync(packageJson, 'utf8'));
+        if (content.name === 'hephaistus' || content.name?.includes('hephaistus')) {
+          return dir;
+        }
+      } catch { /* ignore */ }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break; // reached root
+    dir = parent;
+  }
+  
+  // Strategy 3: Check common locations
+  const commonLocations = [
+    '/Users/aespinel/.openclaw/workspace/hephaistus',
+    path.join(process.cwd(), '..', '..'),
+    path.join(process.cwd(), '..'),
+  ];
+  
+  for (const loc of commonLocations) {
+    const packageJson = path.join(loc, 'package.json');
+    if (fs.existsSync(packageJson)) {
+      try {
+        const content = JSON.parse(fs.readFileSync(packageJson, 'utf8'));
+        if (content.name === 'hephaistus' || content.name?.includes('hephaistus')) {
+          return loc;
+        }
+      } catch { /* ignore */ }
+    }
+  }
+  
+  return null;
+}
 
 export interface DeltaResult {
   success: boolean;
@@ -50,13 +115,16 @@ export async function computeDelta(
   for (const [uuid, modComp] of modComps) {
     const origComp = origComps.get(uuid);
     if (origComp) {
-      // Check for value change
-      if ((origComp as any).value !== (modComp as any).value) {
+      // Check for value change (properties.Value)
+      const origValue = (origComp as any).properties?.Value ?? (origComp as any).value ?? '';
+      const modValue = (modComp as any).properties?.Value ?? (modComp as any).value ?? '';
+      
+      if (origValue !== modValue) {
         valueChanges.push({
           uuid,
           reference: (modComp as any).reference,
-          oldValue: (origComp as any).value,
-          newValue: (modComp as any).value
+          oldValue: origValue,
+          newValue: modValue
         });
       }
 
@@ -102,7 +170,9 @@ export async function applyDeltaToKiCad(
   kicadFilePath: string,
   options: DeltaOptions = {}
 ): Promise<DeltaResult> {
-  const workspaceRoot = process.env.HEPHAISTUS_WORKSPACE || WORKSPACE_ROOT;
+  // Find the HephAIstus project root using the same strategy as kicadKiutilsAdapter
+  const hephaistusRoot = findHephaistusRoot();
+  const workspaceRoot = process.env.HEPHAISTUS_WORKSPACE || hephaistusRoot || process.cwd();
   const scriptPath = path.join(workspaceRoot, 'scripts', 'wrappers', 'kiutils_delta_apply.py');
 
   // Check if script exists
@@ -204,18 +274,27 @@ export async function applyDeltaToKiCad(
 
 /**
  * Find the original JSON file for a modified JSON path.
- * Convention: original is stored alongside modified, or in .hephaistus/backups/
+ * Convention: original is stored as .original.json suffix
+ * Note: We use .original.json to avoid collision with {name}_backup.json 
+ *       which could be the JSON for {name}_backup.kicad_sch
  */
 export function findOriginalJson(modifiedJsonPath: string): string | null {
   const dir = path.dirname(modifiedJsonPath);
   const base = path.basename(modifiedJsonPath, '.json');
   
-  // Check for backup/original alongside
+  // Primary: .original.json baseline (created during Parse KiCad → JSON)
+  const baselinePath = path.join(dir, `${base}.original.json`);
+  if (fs.existsSync(baselinePath)) {
+    return baselinePath;
+  }
+  
+  // Legacy fallback: check for old naming conventions
   const candidates = [
     path.join(dir, `${base}.original.json`),
     path.join(dir, `${base}.bak.json`),
+    path.join(dir, `${base}_backup.json`),  // Legacy (may collide with actual schematic JSON)
     path.join(dir, '.hephaistus', 'backups', `${base}.json`),
-    path.join(dir, '.hephaistus', `${base}.json`)
+    path.join(dir, '.hephaistus', `${base}.original.json`),
   ];
 
   for (const candidate of candidates) {

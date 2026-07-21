@@ -190,8 +190,11 @@ async function handleFileChange(uri: vscode.Uri, event: string): Promise<void> {
     
     // Handle based on file type
     if (ext === '.json' && isStateJson(filePath)) {
-        // JSON state file modified - check for round-trip
-        await handleJsonChange(filePath);
+        // JSON state file modified - update status only (manual apply required)
+        // The user must click "Apply JSON → KiCad" to apply changes
+        console.log('[SyncOrchestrator] JSON changed - status updated, waiting for manual apply');
+        // Just update the sync panel status - don't auto-apply
+        // The applyDelta command will handle the actual application
     } else if (ext === '.kicad_sch') {
         // KiCad file modified - trigger ingestion
         await handleKicadChange(filePath);
@@ -241,15 +244,29 @@ async function handleJsonChange(filePath: string): Promise<void> {
         }
         
         // Find original JSON (before modification)
-        const originalJson = findOriginalJson(filePath);
+        let originalJson = findOriginalJson(filePath);
+        
         if (!originalJson) {
-            console.log('[SyncOrchestrator] No original JSON found for delta computation.');
-            // Could be first save - store as original for future comparisons
-            return;
+            // Try to use baseline file for delta comparison
+            // The baseline should be at <name>.original.json
+            const baseName = path.basename(filePath, '.json');
+            const baselinePath = path.join(path.dirname(filePath), `${baseName}.original.json`);
+            
+            if (fs.existsSync(baselinePath)) {
+                originalJson = baselinePath;
+                console.log(`[SyncOrchestrator] Using baseline file: ${baselinePath}`);
+            } else {
+                console.log('[SyncOrchestrator] No original JSON found for delta computation.');
+                console.log('[SyncOrchestrator] Tried:', filePath.replace('.json', '.original.json'), baselinePath);
+                // Could be first save - store as original for future comparisons
+                return;
+            }
         }
         
         // Find corresponding KiCad file
-        const baseName = path.basename(filePath, '.json').replace('.state', '');
+        const baseName = path.basename(filePath, '.json').replace('_backup', '').replace('.state', '');
+        console.log(`[SyncOrchestrator] Computing delta: ${originalJson} -> ${filePath}`);
+        console.log(`[SyncOrchestrator] Target KiCad file base: ${baseName}`);
         const workspaceRoot = state.workspaceRoot || process.env.HEPHAISTUS_WORKSPACE || process.cwd();
         const kicadCandidates = [
             path.join(workspaceRoot, `${baseName}.kicad_sch`),
@@ -284,8 +301,15 @@ async function handleJsonChange(filePath: string): Promise<void> {
                             delta.removedComponents.length + 
                             delta.connectionChanges.length;
         
+        console.log(`[SyncOrchestrator] Delta computed: ${totalChanges} changes`);
+        console.log(`[SyncOrchestrator]   Value changes: ${delta.valueChanges.length}`);
+        console.log(`[SyncOrchestrator]   Added components: ${delta.addedComponents.length}`);
+        console.log(`[SyncOrchestrator]   Removed components: ${delta.removedComponents.length}`);
+        console.log(`[SyncOrchestrator]   Connection changes: ${delta.connectionChanges.length}`);
+        
         if (totalChanges === 0) {
             console.log('[SyncOrchestrator] No changes detected in JSON.');
+            vscode.window.showInformationMessage('HephAIstus: No changes detected between original and modified JSON.');
             return;
         }
         
@@ -303,6 +327,21 @@ async function handleJsonChange(filePath: string): Promise<void> {
                 `HephAIstus: Applied ${result.changesApplied} change(s) to ${path.basename(kicadFile)}`
             );
             console.log('[SyncOrchestrator] Delta applied successfully:', result.message);
+            
+            // Update lastSync to mark that we synced from JSON
+            try {
+                const state = await loadState();
+                if (state) {
+                    state.lastSync = {
+                        source: 'json',
+                        timestamp: new Date().toISOString(),
+                        jsonHash: state.stateHashes[filePath]?.hash
+                    };
+                    await saveState(state);
+                }
+            } catch (e) {
+                console.error('[SyncOrchestrator] Failed to update lastSync:', e);
+            }
         } else {
             vscode.window.showErrorMessage(
                 `HephAIstus: Failed to apply changes - ${result.message}`
@@ -394,6 +433,12 @@ export async function runSyncCycle(options: SyncOptions = {}): Promise<SyncResul
                         console.warn(`[SyncOrchestrator] Ingestion failed for ${kicadFile}:`, result.message);
                     } else {
                         console.log(`[SyncOrchestrator] Ingestion successful for ${kicadFile}`);
+                        // Mark as synced from KiCad
+                        state.lastSync = {
+                            source: 'kicad',
+                            timestamp: new Date().toISOString(),
+                            kicadHash: state.stateHashes[kicadFile]?.hash
+                        };
                     }
                 } catch (error) {
                     console.error(`[SyncOrchestrator] Ingestion error for ${kicadFile}:`, error);

@@ -49,6 +49,12 @@ export interface ProjectState {
     maxIterations: number;
     lastCheckpoint?: CheckpointMetadata;
     lastBackup?: string; // Backup ID
+    lastSync?: {
+        source: 'kicad' | 'json';
+        timestamp: string;
+        kicadHash?: string;
+        jsonHash?: string;
+    };
     metadata: {
         createdAt: string;
         updatedAt: string;
