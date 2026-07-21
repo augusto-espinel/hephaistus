@@ -360,6 +360,29 @@ export function registerSyncPanel(context: vscode.ExtensionContext): SyncPanelPr
       // Refresh status first to get current file times
       await provider.refreshAsync();
       
+      // Check for pending warnings (unfinished user actions from delta apply)
+      const state = await loadState();
+      if (state && state.pendingWarnings && state.pendingWarnings.length > 0) {
+        const warningMessages = state.pendingWarnings.map((w: any) => 
+          `• ${w.component}: ${w.message}`
+        ).join('\n');
+        
+        const confirm = await vscode.window.showWarningMessage(
+          `You have unfinished manual actions from the last "Apply JSON → KiCad":\n\n${warningMessages}\n\nParsing KiCad now will erase these LLM suggestions. Continue?`,
+          { modal: true },
+          'Parse Anyway',
+          'Cancel'
+        );
+        
+        if (confirm !== 'Parse Anyway') {
+          return;
+        }
+        
+        // Clear pending warnings if user chooses to continue
+        state.pendingWarnings = [];
+        await saveState(state);
+      }
+      
       // Check sync status and warn if JSON has newer changes
       const status = provider.getStatus();
       console.log('[ParseKicad] Status:', status?.direction, 'kicadLastModified:', status?.kicadLastModified, 'jsonLastModified:', status?.jsonLastModified);
@@ -552,9 +575,24 @@ export function registerSyncPanel(context: vscode.ExtensionContext): SyncPanelPr
         const result = await applyDeltaToKiCad(baselinePath, jsonPath, kicadFile);
         
         if (result.success) {
-          vscode.window.showInformationMessage(
-            `HephAIstus: Applied ${result.changesApplied} change(s) to ${path.basename(kicadFile)}`
-          );
+          // Show warnings if any
+          if (result.warnings && result.warnings.length > 0) {
+            const warningMessages = result.warnings.map((w: any) => w.message).join('\n\n');
+            const action = await vscode.window.showWarningMessage(
+              `HephAIstus: Manual action required for ${result.warnings.length} component(s)`,
+              { modal: true, detail: warningMessages },
+              'Open Schematic',
+              'Dismiss'
+            );
+            
+            if (action === 'Open Schematic') {
+              vscode.commands.executeCommand('hephaistus.openKicadSchematic');
+            }
+          } else {
+            vscode.window.showInformationMessage(
+              `HephAIstus: Applied ${result.changesApplied} change(s) to ${path.basename(kicadFile)}`
+            );
+          }
           
           // Update baseline to reflect new state
           try {
@@ -578,6 +616,15 @@ export function registerSyncPanel(context: vscode.ExtensionContext): SyncPanelPr
                 timestamp: new Date().toISOString(),
                 kicadHash
               };
+              
+              // Save pending warnings for guard on Parse KiCad
+              if (result.warnings && result.warnings.length > 0) {
+                state.pendingWarnings = result.warnings;
+                console.log('[ApplyDelta] Saved pending warnings:', result.warnings.length);
+              } else {
+                state.pendingWarnings = [];
+              }
+              
               await saveState(state);
               console.log('[ApplyDelta] Updated lastSync state');
             }

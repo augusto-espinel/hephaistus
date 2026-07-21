@@ -156,10 +156,92 @@ sim_params = props.get('Sim.Params', '')    # "dc=0 ampl=10 f=50 ac=0"
 |-----------|--------|-------------|
 | Value changes | ✅ Complete | Modifies `Value` property, preserves geometry |
 | Component removal | ✅ Complete | Removes symbol, preserves connected wires/junctions |
-| Component addition | 📝 Planned | Requires library symbol lookup |
-| Connection changes | 📝 Planned | Creates stub markers |
+| Component addition | ✅ Complete | Adds symbol with net labels, warning system |
+| Connection changes | 📋 Planned | Creates stub markers |
 
-### 4.2 Delta Application Script
+### 4.2 Component Addition with Net Labels
+
+When adding components, the system uses **net labels** instead of wire routing:
+
+1. **Parse existing nets** — Extract net names from JSON state and schematic labels
+2. **Generate net labels** — Create `(label "net_name" ...)` for each pin connection
+3. **Place at staging position** — New components offset from existing components
+4. **Detect manual action requirements** — Check for series insertion or missing labels
+
+**Why net labels?**
+- No geometry calculations needed
+- User completes wiring in KiCad (their domain)
+- Works for both parallel and series insertions (with warnings)
+
+### 4.3 Warning System
+
+#### Warning Types
+
+| Type | Condition | User Action |
+|------|-----------|-------------|
+| `series_insertion` | All pins to same existing net | Break wire, connect labels |
+| `missing_labels` | Pins to nets without labels | Add labels to existing wires |
+
+#### Detection Functions
+
+```python
+def detect_series_insertion(connections, existing_nets):
+    """Check if all pins connect to same existing net."""
+    unique_nets = set(connections.values())
+    if len(unique_nets) == 1 and unique_nets.pop() in existing_nets:
+        return True, net_name
+    return False, None
+
+def detect_missing_labels(connections, existing_nets, nets_with_labels):
+    """Check if component connects to nets without labels."""
+    missing = []
+    for net in set(connections.values()):
+        if net in existing_nets and net not in nets_with_labels:
+            missing.append(net)
+    return len(missing) > 0, missing
+```
+
+#### Schematic Annotations
+
+Both warning types add text annotations in KiCad:
+
+```
+(series insertion)
+⚠ R3 requires series insertion.
+Break wire on net 'dc_plus' and connect labels.
+
+(missing labels)
+⚠ R4 requires labels on existing nets.
+Add net labels 'net_a', 'net_b' to existing wires.
+```
+
+#### VS Code UI Guard
+
+**Problem:** User could parse KiCad → JSON after applying delta, erasing LLM suggestions before completing manual actions.
+
+**Solution:**
+1. Save `pendingWarnings[]` to `state.json` after Apply JSON → KiCad
+2. Check `pendingWarnings` before Parse KiCad → JSON
+3. Show modal: "You have unfinished manual actions... Parsing will erase LLM suggestions"
+
+**User Flow:**
+```
+Apply JSON → KiCad
+      │
+      ├─ Warnings generated?
+      │   └─ Modal: "Manual action required"
+      │       └─ "Open Schematic" / "Dismiss"
+      │
+      └─ Warnings saved to state.json
+
+User tries Parse KiCad → JSON
+      │
+      └─ Check pendingWarnings
+          ├─ Has warnings? → Modal: "Continue?"
+          └─ Clear if user confirms
+```
+
+### 4.4 Delta Application Script
 
 **Location:** `scripts/wrappers/kiutils_delta_apply.py`
 
@@ -184,7 +266,7 @@ When it reads and re-serializes a file, it strips properties it doesn't understa
 causing values like `show_name` to appear as visible text in the schematic.
 Text-based editing avoids this by only modifying the exact value that changed.
 
-### 4.3 Delta Types
+### 4.5 Delta Types
 
 **Value Change:**
 ```json
@@ -204,6 +286,35 @@ Text-based editing avoids this by only modifying the exact value that changed.
   "removed_components": [{
     "uuid": "...",
     "reference": "R1"
+  }]
+}
+```
+
+**Component Addition:**
+```json
+{
+  "added_components": [{
+    "uuid": "...",
+    "reference": "C2",
+    "libId": "Device:C",
+    "value": "100n",
+    "connections": {
+      "1": "dc_plus",
+      "2": "dc_minus"
+    }
+  }]
+}
+```
+
+**Warning Output:**
+```json
+{
+  "warnings": [{
+    "type": "series_insertion",
+    "component": "R3",
+    "net": "dc_plus",
+    "message": "⚠ R3 requires series insertion...",
+    "action_required": "break_wire"
   }]
 }
 ```

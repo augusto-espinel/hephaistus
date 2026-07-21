@@ -55,11 +55,22 @@ export interface ProjectState {
         kicadHash?: string;
         jsonHash?: string;
     };
+    pendingWarnings?: DeltaWarning[]; // Unfinished user actions from delta apply
     metadata: {
         createdAt: string;
         updatedAt: string;
         schemaVersion: string;
     };
+}
+
+// Re-export DeltaWarning from deltaApplyService
+export interface DeltaWarning {
+    type: 'series_insertion' | 'missing_labels' | 'manual_action';
+    component: string;
+    net?: string;
+    nets?: string[];
+    message: string;
+    action_required: string;
 }
 
 // --- CONSTANTS ---

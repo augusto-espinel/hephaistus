@@ -406,6 +406,616 @@ def find_junction_blocks(content: str) -> List[Tuple[int, int, str, Tuple[float,
     return junctions
 
 
+def find_lib_symbol_block(content: str, lib_id: str) -> Optional[Tuple[int, int, str]]:
+    """
+    Find a library symbol definition in the lib_symbols section.
+    
+    lib_id format: "Library:Symbol" (e.g., "Device:C", "Diode:1N4007")
+    
+    Returns (start_pos, end_pos, block_text) or None if not found.
+    """
+    # Parse lib_id into library nickname and entry name
+    if ':' in lib_id:
+        lib_nickname, entry_name = lib_id.split(':', 1)
+    else:
+        # Just the entry name, no library prefix
+        lib_nickname = None
+        entry_name = lib_id
+    
+    # Pattern to find (symbol "Library:Name" ...)
+    # The lib_id appears as the first quoted string after (symbol
+    escaped_lib_id = re.escape(lib_id)
+    escaped_entry = re.escape(entry_name)
+    
+    # Try exact match first
+    pattern = rf'\(symbol\s+"{escaped_lib_id}"'
+    match = re.search(pattern, content)
+    
+    if not match and lib_nickname:
+        # Try just the entry name
+        pattern = rf'\(symbol\s+"{escaped_entry}"'
+        match = re.search(pattern, content)
+    
+    if not match:
+        return None
+    
+    # Find the complete symbol block
+    start = match.start()
+    depth = 0
+    end = start
+    
+    for i in range(start, len(content)):
+        if content[i] == '(':
+            depth += 1
+        elif content[i] == ')':
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    
+    return (start, end, content[start:end])
+
+
+def find_symbol_instances_section(content: str) -> Tuple[int, int, str]:
+    """
+    Find the last symbol instance in the KiCad 10 schematic.
+    
+    In KiCad 10, symbols are placed directly in the root (kicad_sch) section,
+    not in a schematicSymbols sub-section.
+    
+    Returns (start_pos_of_last_symbol, end_pos, last_symbol_block) or (0, 0, '') if none found.
+    """
+    # Find all (symbol (lib_id ...)) blocks at root level
+    # These are symbol instances, not library definitions
+    
+    pattern = r'\(symbol\s+\(lib_id'
+    last_match = None
+    last_end = 0
+    
+    for match in re.finditer(pattern, content):
+        # Find the complete symbol block
+        start = match.start()
+        depth = 0
+        end = start
+        
+        for i in range(start, len(content)):
+            if content[i] == '(':
+                depth += 1
+            elif content[i] == ')':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        
+        last_match = (start, end, content[start:end])
+        last_end = end
+    
+    return last_match if last_match else (0, 0, '')
+
+
+def find_existing_symbols_bounds(content: str) -> Tuple[float, float, float, float]:
+    """
+    Find the bounding box of existing placed symbols.
+    
+    Returns (min_x, min_y, max_x, max_y).
+    Used for staging new components.
+    """
+    min_x, min_y = float('inf'), float('inf')
+    max_x, max_y = float('-inf'), float('-inf')
+    
+    # Find all (at x y angle) within symbol instances
+    # Symbol instances are (symbol (lib_id ...)) blocks
+    at_pattern = r'\(at\s+([\d.\-]+)\s+([\d.\-]+)\s+[\d.\-]+\)'
+    
+    # Find all symbol instance blocks
+    symbol_pattern = r'\(symbol\s+\(lib_id'
+    
+    for match in re.finditer(symbol_pattern, content):
+        # Find the complete symbol block
+        start = match.start()
+        depth = 0
+        end = start
+        
+        for i in range(start, len(content)):
+            if content[i] == '(':
+                depth += 1
+            elif content[i] == ')':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        
+        # Extract positions from this symbol block
+        symbol_block = content[start:end]
+        for at_match in re.finditer(at_pattern, symbol_block):
+            x = float(at_match.group(1))
+            y = float(at_match.group(2))
+            min_x = min(min_x, x)
+            min_y = min(min_y, y)
+            max_x = max(max_x, x)
+            max_y = max(max_y, y)
+    
+    # Default to reasonable bounds if no symbols found
+    if min_x == float('inf'):
+        min_x, min_y = 0, 0
+        max_x, max_y = 100, 100
+    
+    return (min_x, min_y, max_x, max_y)
+
+
+def generate_uuid() -> str:
+    """Generate a UUID4 string for new components."""
+    import uuid
+    return str(uuid.uuid4())
+
+
+def create_symbol_instance(lib_symbol_block: str, 
+                           new_uuid: str,
+                           reference: str,
+                           value: str,
+                           position: Tuple[float, float]) -> str:
+    """
+    Create a new symbol instance from a library symbol definition.
+    
+    This is a text-based transformation that:
+    1. Takes the library symbol as a template
+    2. Replaces the symbol name with an instance
+    3. Sets position, UUID, reference, and value
+    4. Preserves all KiCad 10 properties
+    
+    Note: This creates a STUB - user must wire in KiCad.
+    """
+    # The library symbol looks like:
+    # (symbol "Device:C" (property "Reference" "C") ...)
+    # 
+    # We need to transform it to an instance:
+    # (symbol (lib_id "Device:C") (reference "C1") (value "100n") 
+    #         (at x y angle) (uuid "...") ...)
+    
+    # Extract library nickname and entry name from the symbol block
+    symbol_name_match = re.search(r'\(symbol\s+"([^"]+)"', lib_symbol_block)
+    if not symbol_name_match:
+        raise ValueError("Could not find symbol name in library block")
+    
+    lib_id = symbol_name_match.group(1)
+    
+    # For KiCad 10, symbol instances have a different structure
+    # They reference the library symbol and have instance-specific properties
+    
+    # Build the symbol instance
+    # KiCad 10 format:
+    # (symbol (lib_id "Device:C") (at x y angle) (uuid "...") 
+    #         (property "Reference" "C1" ...) (property "Value" "100n" ...) ...)
+    
+    # We'll use the library symbol as a template and modify it
+    instance = lib_symbol_block
+    
+    # Replace symbol name with instance structure
+    # This is complex - KiCad 10 has a specific format for instances
+    # 
+    # The safest approach: create a minimal instance that references the library symbol
+    
+    # KiCad 10 symbol instance format:
+    instance = f'''(symbol
+		(lib_id "{lib_id}")
+		(at {position[0]:.2f} {position[1]:.2f} 0)
+		(uuid "{new_uuid}")
+		(property "Reference" "{reference}"
+			(at {position[0]:.2f} {position[1] + 1.27:.2f} 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "{value}"
+			(at {position[0]:.2f} {position[1] - 1.27:.2f} 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at {position[0]:.2f} {position[1]:.2f} 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at {position[0]:.2f} {position[1]:.2f} 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+	)'''
+    
+    return instance
+
+
+def extract_existing_nets(json_state: Dict[str, Any]) -> set:
+    """
+    Extract all net names from the JSON state.
+    
+    Returns a set of net names.
+    """
+    nets = set()
+    for wire in json_state.get('wires', []):
+        if 'net' in wire:
+            nets.add(wire['net'])
+    for junction in json_state.get('junctions', []):
+        if 'net' in junction:
+            nets.add(junction['net'])
+    for comp in json_state.get('components', []):
+        for pin in comp.get('pins', []):
+            if 'net' in pin and pin['net']:
+                nets.add(pin['net'])
+    return nets
+
+
+def extract_nets_with_labels(content: str) -> set:
+    """
+    Extract nets that currently have labels in the KiCad schematic.
+    
+    Returns a set of net names that have labels.
+    """
+    nets_with_labels = set()
+    
+    # Find all (label "net_name" ...) blocks
+    label_pattern = r'\(label\s+"([^"]+)"'
+    for match in re.finditer(label_pattern, content):
+        nets_with_labels.add(match.group(1))
+    
+    # Also check global labels
+    global_label_pattern = r'\(global_label\s+"([^"]+)"'
+    for match in re.finditer(global_label_pattern, content):
+        nets_with_labels.add(match.group(1))
+    
+    # Check hierarchical labels
+    hier_label_pattern = r'\(hierarchical_label\s+"([^"]+)"'
+    for match in re.finditer(hier_label_pattern, content):
+        nets_with_labels.add(match.group(1))
+    
+    return nets_with_labels
+
+
+def detect_series_insertion(connections: Dict[str, str], existing_nets: set) -> Tuple[bool, Optional[str]]:
+    """
+    Detect if component insertion requires breaking existing net.
+    
+    Series insertion: All pins connect to the same existing net.
+    This means the user needs to break the net and insert component.
+    
+    Returns: (is_series_insertion, net_name_if_series)
+    """
+    if not connections:
+        return False, None
+    
+    unique_nets = set(connections.values())
+    
+    # If all pins connect to same existing net → series insertion
+    if len(unique_nets) == 1:
+        net_name = unique_nets.pop()
+        if net_name in existing_nets:
+            return True, net_name
+    
+    return False, None
+
+
+def detect_missing_labels(connections: Dict[str, str], 
+                          existing_nets: set,
+                          nets_with_labels: set) -> Tuple[bool, List[str]]:
+    """
+    Detect if component connects to nets that don't have labels.
+    
+    Parallel insertion: Different pins to different nets.
+    If any of those nets exist but don't have labels, user needs to add them.
+    
+    Returns: (needs_labels, list_of_nets_missing_labels)
+    """
+    if not connections:
+        return False, []
+    
+    unique_nets = set(connections.values())
+    missing_labels = []
+    
+    for net in unique_nets:
+        if net in existing_nets and net not in nets_with_labels:
+            missing_labels.append(net)
+    
+    return len(missing_labels) > 0, missing_labels
+
+
+def create_text_annotation(text: str, position: Tuple[float, float], 
+                            uuid_str: str = None, font_size: float = 1.5) -> str:
+    """
+    Create a KiCad text annotation (non-electrical text).
+    
+    Used for warnings and hints in the schematic.
+    """
+    if uuid_str is None:
+        uuid_str = str(__import__('uuid').uuid4())
+    
+    # Escape special characters for S-expression
+    escaped_text = text.replace('"', '\\"').replace('\n', '\\n')
+    
+    return f'''(text "{escaped_text}"
+	(at {position[0]:.2f} {position[1]:.2f} 0)
+	(effects
+		(font
+			(size {font_size} {font_size})
+			(thickness 0.3)
+		)
+		(justify left)
+	)
+	(uuid "{uuid_str}")
+)'''
+
+
+def create_net_label(net_name: str, position: Tuple[float, float], 
+                     uuid_str: str = None, rotation: float = 0) -> str:
+    """
+    Create a KiCad net label.
+    
+    Net labels connect wires/terminals with the same label name.
+    """
+    if uuid_str is None:
+        uuid_str = str(__import__('uuid').uuid4())
+    
+    # Calculate justification based on rotation
+    # Rotation 0 = right-facing, 90 = down, 180 = left, 270 = up
+    if rotation == 0:
+        justify = "left bottom"
+    elif rotation == 90:
+        justify = "left bottom"
+    elif rotation == 180:
+        justify = "right bottom"
+    elif rotation == 270:
+        justify = "right bottom"
+    else:
+        justify = "left bottom"
+    
+    return f'''(label "{net_name}"
+	(at {position[0]:.2f} {position[1]:.2f} {int(rotation)})
+	(effects
+		(font
+			(size 1.27 1.27)
+		)
+		(justify {justify})
+	)
+	(uuid "{uuid_str}")
+)'''
+
+
+def find_existing_nets_from_json(content: str) -> set:
+    """
+    Extract existing net names from a KiCad schematic file.
+    
+    Returns a set of net names found in labels.
+    """
+    nets = set()
+    
+    # Find all (label "net_name" ...) blocks
+    label_pattern = r'\(label\s+"([^"]+)"'
+    for match in re.finditer(label_pattern, content):
+        nets.add(match.group(1))
+    
+    # Also check global labels
+    global_label_pattern = r'\(global_label\s+"([^"]+)"'
+    for match in re.finditer(global_label_pattern, content):
+        nets.add(match.group(1))
+    
+    # Check hierarchical labels
+    hier_label_pattern = r'\(hierarchical_label\s+"([^"]+)"'
+    for match in re.finditer(hier_label_pattern, content):
+        nets.add(match.group(1))
+    
+    return nets
+
+
+def apply_component_addition_text(content: str, added_components: List[Dict[str, Any]],
+                                   modified_json: Dict[str, Any]) -> Tuple[str, List[str], List[Dict[str, Any]]]:
+    """
+    Add components using text-based editing.
+    
+    Creates STUB connections with net labels - user must verify connections.
+    Detects series insertions and missing labels, adds warning annotations.
+    
+    Returns (modified_content, list_of_changes_applied, list_of_warnings).
+    """
+    changes_applied = []
+    warnings = []
+    
+    # Extract existing nets from both JSON and schematic
+    existing_nets_json = extract_existing_nets(modified_json)
+    existing_nets_sch = find_existing_nets_from_json(content)
+    existing_nets = existing_nets_json | existing_nets_sch
+    
+    # Extract nets that already have labels
+    nets_with_labels = extract_nets_with_labels(content)
+    
+    # Find the last symbol instance in KiCad 10 format
+    last_symbol = find_symbol_instances_section(content)
+    
+    if last_symbol == (0, 0, ''):
+        changes_applied.append("ERROR: Could not find any existing symbols to append after")
+        return content, changes_applied, warnings
+    
+    last_symbol_start, last_symbol_end, last_symbol_block = last_symbol
+    
+    # Find bounding box of existing symbols for staging position
+    min_x, min_y, max_x, max_y = find_existing_symbols_bounds(content)
+    
+    # Staging position: offset from the right edge of existing components
+    staging_offset = 25.4  # 25.4mm = 1 inch in KiCad units
+    staging_x = max_x + staging_offset
+    staging_y = min_y
+    
+    # Track where to insert annotations (after all components)
+    annotations = []
+    
+    for comp in added_components:
+        lib_id = comp.get('libId', '')
+        reference = comp.get('reference', 'U?')
+        value = comp.get('properties', {}).get('Value', comp.get('value', ''))
+        uuid = comp.get('uuid', generate_uuid())
+        connections = comp.get('connections', {})  # {"1": "net_name", "2": "GND"}
+        
+        # Find the library symbol definition
+        lib_symbol = find_lib_symbol_block(content, lib_id)
+        if lib_symbol is None:
+            changes_applied.append(f"WARNING: Library symbol '{lib_id}' not found. "
+                                   f"Add it to KiCad first, then try again.")
+            continue
+        
+        start, end, lib_symbol_block = lib_symbol
+        
+        # Calculate staging position (offset for each new component)
+        position = (staging_x, staging_y)
+        staging_y += staging_offset  # Move down for next component
+        
+        # Create symbol instance
+        try:
+            instance = create_symbol_instance(
+                lib_symbol_block,
+                new_uuid=uuid,
+                reference=reference,
+                value=value,
+                position=position
+            )
+        except ValueError as e:
+            changes_applied.append(f"WARNING: Could not create instance for {reference}: {e}")
+            continue
+        
+        # Insert after the last symbol instance
+        insert_pos = last_symbol_end
+        indented_instance = '\n\t' + instance.replace('\n', '\n\t')
+        content = content[:insert_pos] + indented_instance + content[insert_pos:]
+        last_symbol_end = insert_pos + len(indented_instance)
+        
+        # Check for series insertion
+        is_series, series_net = detect_series_insertion(connections, existing_nets)
+        
+        # Check for missing labels
+        needs_labels, missing_nets = detect_missing_labels(connections, existing_nets, nets_with_labels)
+        
+        if is_series:
+            # Create warning annotation
+            warning_text = f"⚠ {reference} requires series insertion.\nBreak wire on net '{series_net}' and connect labels."
+            annotation_pos = (position[0], position[1] + 5.0)  # Below component
+            warning = {
+                "type": "series_insertion",
+                "component": reference,
+                "net": series_net,
+                "message": f"⚠ {reference} requires series insertion. Break wire on net '{series_net}' and connect labels.",
+                "action_required": "break_wire"
+            }
+            warnings.append(warning)
+            changes_applied.append(f"WARNING: {reference} - SERIES INSERTION on net '{series_net}'")
+            changes_applied.append(f"  User must break wire and connect labels manually")
+            
+            # Add annotation to schematic
+            annotation = create_text_annotation(warning_text, annotation_pos)
+            annotations.append(annotation)
+        
+        elif needs_labels:
+            # Create warning for missing labels
+            nets_str = "', '".join(missing_nets)
+            warning_text = f"⚠ {reference} requires labels on existing nets.\nAdd net labels '{nets_str}' to existing wires."
+            annotation_pos = (position[0], position[1] + 5.0)  # Below component
+            warning = {
+                "type": "missing_labels",
+                "component": reference,
+                "nets": missing_nets,
+                "message": f"⚠ {reference} requires labels on existing nets. Add net labels '{nets_str}' to existing wires.",
+                "action_required": "add_labels"
+            }
+            warnings.append(warning)
+            changes_applied.append(f"WARNING: {reference} - MISSING LABELS on nets: {nets_str}")
+            changes_applied.append(f"  User must add labels to existing wires")
+            
+            # Add annotation to schematic
+            annotation = create_text_annotation(warning_text, annotation_pos)
+            annotations.append(annotation)
+        
+        # Add net labels for connections
+        if connections:
+            # Extract pin positions from library symbol for label placement
+            pin_positions = extract_pin_positions_from_symbol(lib_symbol_block)
+            
+            for pin_num, net_name in connections.items():
+                if not net_name:
+                    continue
+                
+                # Calculate label position based on pin position
+                # Label offset from pin (small offset toward outside)
+                if pin_num in pin_positions:
+                    pin_pos = pin_positions[pin_num]
+                    # Offset label from pin position
+                    label_offset = 2.54  # 2.54mm offset
+                    label_pos = (position[0] + pin_pos[0] + label_offset, 
+                                position[1] + pin_pos[1])
+                else:
+                    # Default position if pin not found
+                    label_pos = (position[0] + 5.0, position[1])
+                
+                # Create and insert label
+                label = create_net_label(net_name, label_pos)
+                content = content[:last_symbol_end] + '\n\t' + label.replace('\n', '\n\t') + content[last_symbol_end:]
+                last_symbol_end += len(label) + 2  # Account for newlines and tab
+                
+                changes_applied.append(f"Added label '{net_name}' at {reference} pin {pin_num}")
+        
+        if not is_series and not needs_labels:
+            changes_applied.append(f"Added {reference} ({lib_id}) at staging position ({position[0]:.1f}, {position[1]:.1f})")
+            if connections:
+                changes_applied.append(f"  Labels: {', '.join(f'{k}={v}' for k, v in connections.items())}")
+    
+    # Insert all annotations at the end
+    for annotation in annotations:
+        content = content[:last_symbol_end] + '\n\t' + annotation.replace('\n', '\n\t') + content[last_symbol_end:]
+    
+    return content, changes_applied, warnings
+
+
+def extract_pin_positions_from_symbol(symbol_block: str) -> Dict[str, Tuple[float, float]]:
+    """
+    Extract pin positions from a library symbol definition.
+    
+    Returns a dict mapping pin number to (x, y) position.
+    """
+    pin_positions = {}
+    
+    # Find pin definitions in the symbol
+    # KiCad 10 format: (pin "1" (at x y angle) ...)
+    pin_pattern = r'\(pin\s+"(\d+)"\s+\(at\s+([\d.\-]+)\s+([\d.\-]+)'
+    for match in re.finditer(pin_pattern, symbol_block):
+        pin_num = match.group(1)
+        x = float(match.group(2))
+        y = float(match.group(3))
+        pin_positions[pin_num] = (x, y)
+    
+    return pin_positions
+
+
 def apply_component_removal_text(content: str, removed_components: List[Dict[str, Any]], 
                                   original_json: Dict[str, Any]) -> Tuple[str, List[str]]:
     """
@@ -493,7 +1103,8 @@ def apply_component_removal_text(content: str, removed_components: List[Dict[str
 
 def apply_delta_to_schematic(schematic_path: str, delta: Dict[str, Any], 
                              output_path: Optional[str] = None,
-                             original_json: Optional[Dict[str, Any]] = None) -> bool:
+                             original_json: Optional[Dict[str, Any]] = None,
+                             modified_json: Optional[Dict[str, Any]] = None) -> Tuple[bool, List[str], List[Dict[str, Any]]]:
     """
     Apply delta changes to KiCad schematic file using TEXT-BASED editing.
     
@@ -504,9 +1115,10 @@ def apply_delta_to_schematic(schematic_path: str, delta: Dict[str, Any],
         delta: Delta object from compute_delta()
         output_path: Optional output path (default: overwrite original)
         original_json: Original JSON (needed for component removal to get pin positions)
+        modified_json: Modified JSON (needed for component addition to get new component data)
     
     Returns:
-        True if successful, False otherwise
+        Tuple of (success: bool, changes_applied: List[str], warnings: List[Dict])
     """
     try:
         # Read the schematic file as text
@@ -514,6 +1126,7 @@ def apply_delta_to_schematic(schematic_path: str, delta: Dict[str, Any],
             content = f.read()
         
         changes_applied = []
+        warnings = []
         
         # 1. Apply value changes using text-based editing
         if delta.get('value_changes'):
@@ -530,9 +1143,16 @@ def apply_delta_to_schematic(schematic_path: str, delta: Dict[str, Any],
                 )
                 changes_applied.extend(removal_changes)
         
-        # 3. Handle added components (TODO: implement text-based addition)
-        for comp in delta.get('added_components', []):
-            changes_applied.append(f"TODO: Add {comp.get('reference')} (not implemented)")
+        # 3. Handle added components (text-based addition with net labels)
+        if delta.get('added_components'):
+            if modified_json is None:
+                changes_applied.append("WARNING: modified_json required for component addition")
+            else:
+                content, addition_changes, addition_warnings = apply_component_addition_text(
+                    content, delta['added_components'], modified_json
+                )
+                changes_applied.extend(addition_changes)
+                warnings.extend(addition_warnings)
         
         # 4. Handle connection changes (TODO: implement wire reconnection)
         for change in delta.get('connection_changes', []):
@@ -548,13 +1168,13 @@ def apply_delta_to_schematic(schematic_path: str, delta: Dict[str, Any],
         with open(save_path, 'w', encoding='utf-8') as f:
             f.write(content)
         
-        return True
+        return True, changes_applied, warnings
         
     except Exception as e:
         print(f"Error applying delta: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc(file=sys.stderr)
-        return False
+        return False, [f"Error: {e}"], []
 
 
 def main():
@@ -591,14 +1211,16 @@ def main():
         }))
         sys.exit(0)
     
-    # Apply delta (pass original JSON for component removal)
-    success = apply_delta_to_schematic(kicad_path, delta, original_json=original)
+    # Apply delta (pass original JSON for component removal, modified JSON for addition)
+    success, changes_log, warnings = apply_delta_to_schematic(kicad_path, delta, original_json=original, modified_json=modified)
     
     if success:
         # Return summary
         print(json.dumps({
             "status": "success",
-            "changes_applied": total_changes,
+            "changes_applied": len(changes_log),
+            "changes": changes_log,
+            "warnings": warnings,
             "delta": delta,
             "backup": kicad_path + '.bak'
         }, indent=2))
@@ -606,7 +1228,9 @@ def main():
     else:
         print(json.dumps({
             "status": "error",
-            "message": "Failed to apply delta"
+            "message": "Failed to apply delta",
+            "changes": changes_log,
+            "warnings": warnings
         }))
         sys.exit(1)
 

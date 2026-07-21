@@ -74,9 +74,20 @@ function findHephaistusRoot(): string | null {
   return null;
 }
 
+export interface DeltaWarning {
+  type: 'series_insertion' | 'missing_labels' | 'manual_action';
+  component: string;
+  net?: string;
+  nets?: string[];
+  message: string;
+  action_required: string;
+}
+
 export interface DeltaResult {
   success: boolean;
   changesApplied: number;
+  changes?: string[];
+  warnings: DeltaWarning[];
   delta: {
     valueChanges: Array<{ uuid: string; reference: string; oldValue: string; newValue: string }>;
     addedComponents: any[];
@@ -180,6 +191,8 @@ export async function applyDeltaToKiCad(
     return {
       success: false,
       changesApplied: 0,
+      changes: [],
+      warnings: [],
       delta: { valueChanges: [], addedComponents: [], removedComponents: [], connectionChanges: [] },
       backup: '',
       message: `Delta apply script not found: ${scriptPath}`
@@ -223,6 +236,8 @@ export async function applyDeltaToKiCad(
           resolve({
             success: true,
             changesApplied: result.changes_applied || 0,
+            changes: result.changes || [],
+            warnings: result.warnings || [],
             delta: {
               valueChanges: result.delta?.value_changes || [],
               addedComponents: result.delta?.added_components || [],
@@ -236,6 +251,8 @@ export async function applyDeltaToKiCad(
           resolve({
             success: true,
             changesApplied: 0,
+            changes: [],
+            warnings: [],
             delta: { valueChanges: [], addedComponents: [], removedComponents: [], connectionChanges: [] },
             backup: '',
             message: 'No changes detected between original and modified JSON'
@@ -244,6 +261,8 @@ export async function applyDeltaToKiCad(
           resolve({
             success: false,
             changesApplied: 0,
+            changes: [],
+            warnings: [],
             delta: { valueChanges: [], addedComponents: [], removedComponents: [], connectionChanges: [] },
             backup: '',
             message: result.message || 'Unknown error applying delta'
@@ -253,6 +272,8 @@ export async function applyDeltaToKiCad(
         resolve({
           success: false,
           changesApplied: 0,
+          changes: [],
+          warnings: [],
           delta: { valueChanges: [], addedComponents: [], removedComponents: [], connectionChanges: [] },
           backup: '',
           message: `Failed to parse delta apply output: ${(parseError as Error).message}\nStdout: ${stdout}\nStderr: ${stderr}`
@@ -264,6 +285,8 @@ export async function applyDeltaToKiCad(
       resolve({
         success: false,
         changesApplied: 0,
+        changes: [],
+        warnings: [],
         delta: { valueChanges: [], addedComponents: [], removedComponents: [], connectionChanges: [] },
         backup: '',
         message: `Failed to run delta apply: ${err.message}`

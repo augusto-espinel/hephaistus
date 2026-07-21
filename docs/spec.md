@@ -18,9 +18,10 @@ The system operates across three pillars:
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
 | KiCad → JSON Parsing | ✅ Complete | Full component/net extraction |
-| JSON → KiCad Delta Apply | ✅ Complete | Value changes, component removal |
+| JSON → KiCad Delta Apply | ✅ Complete | Value changes, component removal, component addition |
 | VS Code Extension | ✅ Complete | File watchers, sync panel |
 | Round-Trip Integration | ✅ Complete | Both directions working |
+| Warning System | ✅ Complete | Series insertion, missing labels detection |
 | LLM Integration | 📝 Planned | SKiDL code generation |
 | SPICE Simulation | 📋 Planned | ngspice execution |
 

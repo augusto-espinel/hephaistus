@@ -349,9 +349,171 @@ Complete a full workflow from schematic edit to LLM suggestion:
 
 ---
 
-## 12. Regression Tests
+## 12. Component Addition Tests
 
-### 12.1 Previous Bugs
+### 12.1 Parallel Insertion (Different Nets)
+
+**Setup:** Create test JSON with component connecting to different nets.
+
+```json
+{
+  "added_components": [{
+    "reference": "C2",
+    "libId": "Device:C",
+    "value": "100n",
+    "connections": {
+      "1": "dc_plus",
+      "2": "dc_minus"
+    }
+  }]
+}
+```
+
+| Test | Result | Notes |
+|------|--------|-------|
+| [ ] Component added to schematic | | |
+| [ ] Net labels created for each pin | | |
+| [ ] No warning annotations in schematic | | |
+| [ ] JSON output: `warnings: []` | | |
+| [ ] Schematic opens in KiCad without errors | | |
+| [ ] Labels appear at correct positions | | |
+
+**Manual Verification in KiCad:**
+1. Open modified schematic in KiCad
+2. Verify C2 appears at staging position (offset from existing components)
+3. Verify labels `dc_plus` and `dc_minus` appear near pins
+4. Run ERC (Electrical Rules Check) — should pass
+
+### 12.2 Series Insertion (Same Net)
+
+**Setup:** Create test JSON with component connecting to same net.
+
+```json
+{
+  "added_components": [{
+    "reference": "R3",
+    "libId": "Device:R",
+    "value": "100",
+    "connections": {
+      "1": "dc_plus",
+      "2": "dc_plus"
+    }
+  }]
+}
+```
+
+| Test | Result | Notes |
+|------|--------|-------|
+| [ ] Component added to schematic | | |
+| [ ] Warning annotation created in schematic | | |
+| [ ] JSON output: `warnings[].type === "series_insertion"` | | |
+| [ ] VS Code modal shows warning | | |
+| [ ] `pendingWarnings` saved to state.json | | |
+
+**Expected Schematic Annotation:**
+```
+⚠ R3 requires series insertion.
+Break wire on net 'dc_plus' and connect labels.
+```
+
+**Manual Verification in KiCad:**
+1. Open modified schematic
+2. Verify warning annotation appears below R3
+3. Verify both pins have `dc_plus` labels
+4. To complete: Break existing wire, connect R3 in series, update labels
+
+### 12.3 Missing Labels (Parallel Without Existing Labels)
+
+**Setup:** Create test JSON with component connecting to nets that exist but have no labels.
+
+```json
+{
+  "added_components": [{
+    "reference": "R4",
+    "libId": "Device:R",
+    "value": "1k",
+    "connections": {
+      "1": "unlabeled_net_a",
+      "2": "unlabeled_net_b"
+    }
+  }]
+}
+```
+
+| Test | Result | Notes |
+|------|--------|-------|
+| [ ] Component added to schematic | | |
+| [ ] Warning annotation created | | |
+| [ ] JSON output: `warnings[].type === "missing_labels"` | | |
+| [ ] VS Code modal shows warning | | |
+
+**Expected Schematic Annotation:**
+```
+⚠ R4 requires labels on existing nets.
+Add net labels 'unlabeled_net_a', 'unlabeled_net_b' to existing wires.
+```
+
+**Manual Verification in KiCad:**
+1. Open modified schematic
+2. Verify warning annotation appears below R4
+3. Add labels to existing wires manually
+4. Verify R4 labels connect when wires are labeled
+
+### 12.4 VS Code UI Guard
+
+**Setup:** Apply JSON → KiCad with warnings, then attempt Parse KiCad → JSON.
+
+| Test | Result | Notes |
+|------|--------|-------|
+| [ ] Apply JSON → KiCad shows warning modal | | |
+| [ ] "Open Schematic" button opens schematic | | |
+| [ ] Parse KiCad → JSON blocked with modal | | |
+| [ ] Modal shows pending warnings | | |
+| [ ] "Parse Anyway" clears warnings and proceeds | | |
+| [ ] "Cancel" returns to sync panel | | |
+
+### 12.5 Wiring in KiCad
+
+**Prerequisites:** Component added with net labels.
+
+**Steps:**
+1. Open modified schematic in KiCad
+2. Locate new component at staging position
+3. Locate net labels on pins
+4. Use wire tool to connect labels to existing circuit:
+   - For parallel: Connect each label to matching net label on existing circuit
+   - For series: Break existing wire, connect component in series
+5. Verify ERC passes
+6. Save schematic
+
+| Test | Result | Notes |
+|------|--------|-------|
+| [ ] Labels visible in KiCad | | |
+| [ ] Wire tool connects to labels | | |
+| [ ] ERC passes after manual wiring | | |
+| [ ] Schematic saves without errors | | |
+| [ ] Re-parse preserves manual changes | | |
+
+### 12.6 Round-Trip After Wiring
+
+**Steps:**
+1. Complete manual wiring in KiCad
+2. Save schematic
+3. Parse KiCad → JSON
+4. Verify JSON reflects wired connections
+
+| Test | Result | Notes |
+|------|--------|-------|
+| [ ] Parse succeeds after manual wiring | | |
+| [ ] JSON shows correct net connections | | |
+| [ ] No duplicate components | | |
+| [ ] Net names preserved | | |
+
+---
+
+## 13. Regression Tests
+
+### 13.1 Previous Bugs
 
 | Bug ID | Description | Test | Result | Notes |
 |--------|-------------|------|--------|-------|
@@ -384,6 +546,7 @@ Complete a full workflow from schematic edit to LLM suggestion:
 | Integration | | | |
 | Error Handling | | | |
 | Performance | | | |
+| Component Addition | | | |
 | **TOTAL** | | | |
 
 **Critical Issues Found:**
