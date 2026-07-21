@@ -215,33 +215,38 @@ Before applying changes:
 | Feature | Description |
 |---------|-------------|
 | Status Indicator | 🔴 KiCad newer, 🔵 JSON newer, 🟢 synced |
+| Recommended Action | Arrow + "(recommended)" label on logical button |
 | File Times | Shows modification timestamps |
 | Manual Buttons | Parse KiCad → JSON, Apply JSON → KiCad |
+| Confirmation Dialogs | Warns before destructive operations |
+| Discard Option | "Discard KiCad changes" when KiCad newer but JSON unchanged |
 | VS Code Sidebar | "HephAIstus Sync" panel in Explorer |
 
-### 5.2 Loop Prevention
+### 5.2 Manual Sync Workflow
 
-To prevent infinite loops:
+The sync workflow is **one-way-at-a-time** (not circular):
 
-| Mechanism | Purpose |
-|-----------|---------|
-| `isApplyingDelta` flag | True while writing to KiCad |
-| `lastDeltaApplyTime` timestamp | Records last delta application |
-| `APPLIED_DELTA_TIMEOUT_MS` (5000ms) | Cooldown period |
+1. **KiCad → JSON**: User clicks "Parse KiCad → JSON"
+   - If JSON has uncommitted changes: warning dialog
+   - Creates `{name}.json` and `{name}.original.json` baseline
 
-**Mechanism:** `handleKicadChange()` ignores file changes if delta was applied recently.
+2. **JSON → KiCad**: User clicks "Apply JSON → KiCad"
+   - If KiCad has uncommitted changes: warning dialog
+   - If no JSON changes but KiCad newer: offer "Discard KiCad changes"
+   - Updates KiCad from JSON delta
+   - Updates baseline to reflect new state
 
-### 5.3 Loop Prevention
+### 5.3 Baseline File Naming
 
-To prevent infinite loops:
+Baseline files use `.original.json` suffix to avoid collision with `_backup.kicad_sch` files:
 
-| Mechanism | Purpose |
-|-----------|---------|
-| `isApplyingDelta` flag | True while writing to KiCad |
-| `lastDeltaApplyTime` timestamp | Records last delta application |
-| `APPLIED_DELTA_TIMEOUT_MS` (5000ms) | Cooldown period |
+```
+rectifier.kicad_sch        → KiCad schematic
+rectifier.json             → JSON state (editable)
+rectifier.original.json     → Baseline for delta comparison
+```
 
-**Mechanism:** `handleKicadChange()` ignores file changes if delta was applied recently.
+**Note:** The pattern `{name}_backup.json` is reserved for JSON state of `{name}_backup.kicad_sch`.
 
 ### 5.4 Sync State Tracking
 
