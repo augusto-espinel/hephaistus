@@ -1,5 +1,7 @@
 # Manual Test Specification: Round-Trip Workflow
 
+> **Superseded 2026-07-23.** Use `docs/testing/USER-TESTS.md` for the current manual test spec. This file remains as historical reference.
+
 **Test Subject**: `tests/user/rectifier.kicad_sch`
 **Created**: 2026-07-20
 **Status**: Ready for manual testing

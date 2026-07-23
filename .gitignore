@@ -53,9 +53,5 @@ Desktop.ini
 *.temp
 .cache/
 
-# Test outputs and user data
-tests/user/*.md
-tests/user/.hephaistus/
-tests/user/.history/
-tests/user/*.log
-tests/user/*.erc
+# Local test workspace (user schematics, generated JSON, logs, backups)
+tests/

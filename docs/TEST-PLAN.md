@@ -1,5 +1,10 @@
 # HephAIstus Test Plan
 
+> **Superseded 2026-07-23.** Use the consolidated test specs instead:
+> - User manual tests: `docs/testing/USER-TESTS.md`
+> - Agent automated tests: `docs/testing/AGENT-TESTS.md`
+> - Test environment overview: `docs/testing/README.md`
+
 *Created 2026-07-16 — Manual Test Checklist*
 
 ---

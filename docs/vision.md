@@ -1,8 +1,11 @@
 # HephAIstus Vision and Use Cases
 
 *Captured 2026-07-15 — Reference for future development*
+*Updated 2026-07-23 — Detailed persona workflows now live in [use_cases_blueprint.md](./use_cases_blueprint.md).*
 
 ---
+
+> **Use-case detail:** This document stays intentionally high-level. For expanded personas, advice-vs-patch workflows, verification loops, and grounding constraints, see [docs/use_cases_blueprint.md](./use_cases_blueprint.md).
 
 ## The Core Problem
 
@@ -14,6 +17,8 @@ Today, these two worlds interact through a painful manual cycle: design in KiCad
 
 ## Primary Use Cases
 
+The use cases below are the short version. The expanded blueprint adds the critical operating rule for the next phase: because HephAIstus cannot yet manipulate all KiCad wiring programmatically, every LLM optimization must separate **machine-appliable patches** from **human wiring advice**, then remember that advice and verify it after the next parse.
+
 ### 1. LLM-Guided Component Selection and Tuning
 
 The engineer draws a schematic with placeholder or initial component values. They describe the optimization goal in natural language: "Make this LDO regulator more efficient while keeping output ripple under 20mV." The LLM proposes specific value changes (R1: 10kΩ → 4.7kΩ, C2: 100nF → 220nF), the engineer reviews the diff, approves, and the schematic updates automatically. The spatial layout is untouched — only values change.
@@ -24,7 +29,7 @@ Once values are proposed, the tool doesn't just guess — it *runs the simulatio
 
 ### 3. Schematic ↔ Simulation State Synchronization
 
-The JSON ledger is the translation layer. When the engineer edits the schematic directly (adds a component, changes a value), the tool detects the change, updates the JSON state, and flags any Python simulation scripts as stale. When the LLM proposes a change, it flows back through the ledger to update the schematic. Bidirectional, with the human always in the loop for approval.
+The JSON ledger is the translation layer. When the engineer edits the schematic directly (adds a component, changes a value), the tool detects the change, updates the JSON state, and flags any Python simulation scripts as stale. When the LLM proposes a change, it flows back through the ledger to update the schematic. Bidirectional, with the human always in the loop for approval. The same ledger also tracks pending manual advice so wiring instructions are not lost between parse cycles.
 
 ### 4. Incremental Design Exploration
 
@@ -49,7 +54,7 @@ Beyond value changes, the LLM can propose structural modifications:
 - **Delete components:** Redundant parallel resistors, unnecessary bypass paths
 - **Re-wire connections:** Wrong net assignments, topology corrections
 
-Re-wiring uses **stub connections** — logical connections that make the circuit simulatable while preserving user spatial control. The user sees the stub in KiCad and completes the physical wiring.
+Re-wiring uses **stub connections and tracked advice** — logical connections that make the circuit simulatable while preserving user spatial control. The user sees the stub or checklist item in KiCad/VS Code, completes the physical wiring, and HephAIstus verifies on the next parse that the expected labels, component pins, and net connections actually appeared.
 
 ---
 
@@ -62,6 +67,7 @@ The LLM can **iterate through multiple simulation cycles** (troubleshoot, refine
 - **Silence budget:** Configurable number of autonomous iterations (default N=3-5) before the human must acknowledge
 - **Checkpoint/savepoint semantics:** Before the LLM proposes anything, the state is snapshotted. If the optimization diverges or the user aborts, they can revert to the last known-good state
 - **Batch approval:** Like git rebase — you approve a *batch* of changes, not a single suggestion
+- **Advice memory:** Checkpoints include which manual actions were verified, failed, or are still pending, so the LLM does not repeat stale wiring instructions
 
 ---
 
@@ -188,7 +194,7 @@ Configurable model routing:
 
 ### 1. Decoupled Collaboration (Not Copilot Autocomplete)
 
-Most "AI for EDA" tools try to autocomplete the schematic or generate everything from scratch. HephAIstus takes a fundamentally different stance: **the human owns the canvas, the AI owns the math**. This isn't about replacing the engineer's spatial judgment — it's about augmenting their mathematical reasoning. The geometry is immutable; only values and new parts (at a staging area) change.
+Most "AI for EDA" tools try to autocomplete the schematic or generate everything from scratch. HephAIstus takes a fundamentally different stance: **the human owns the canvas, the AI owns the math**. This isn't about replacing the engineer's spatial judgment — it's about augmenting their mathematical reasoning. The geometry remains user-owned; deterministic edits are limited to safe deltas, while anything spatial or ambiguous becomes explicit, verifiable advice.
 
 ### 2. The JSON Ledger as a Shared Mental Model
 

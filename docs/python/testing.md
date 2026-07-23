@@ -1,5 +1,7 @@
 TESTING GUIDE: KiCad Sync (Hephaistus) - Ingestion & Update testing
 
+> **Likely obsolete 2026-07-23.** This references the older Python/JSON-proxy workflow. Use `docs/testing/README.md`, `docs/testing/AGENT-TESTS.md`, and `scripts/test/agent.sh` for the current consolidated test environment.
+
 Overview
 - This guide documents how to run ingestion alignment tests and delta updates using the JSON proxy when KiCad tooling is unavailable, and how to enable full KiCad-based tests when kiutils is present.
 

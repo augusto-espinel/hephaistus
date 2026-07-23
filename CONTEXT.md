@@ -136,7 +136,7 @@ The codebase is versioned and pushed to GitHub. Contributors can clone and follo
 
 1. **Enhance component extraction** — Pull reference/value/footprint from `symbolInstances` (currently only in `properties`)
 2. **Wire LLM integration** — Connect optimization model to ingestion
-3. **Continue TEST-PLAN.md** — Sections 4-7 (Python bridge, LLM integration, patch application, UI)
+3. **Use consolidated test specs** — User: `docs/testing/USER-TESTS.md`; Agent: `docs/testing/AGENT-TESTS.md` (`npm run test:agent`)
 4. **Test full workflow** — End-to-end with simulation
 5. **Document sync workflow** — Add user guide for manual sync process
 
