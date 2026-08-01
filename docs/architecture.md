@@ -245,7 +245,78 @@ User tries Parse KiCad → JSON
 
 **Location:** `scripts/wrappers/kiutils_delta_apply.py`
 
+#### Integrity Validation (mandatory, added 2026-08-01)
+
+Before computing any delta, the script validates **both** JSON states and
+refuses to run (exit code 3, `integrity_validation_failed`) if it finds:
+
+- components missing `reference` or `uuid`;
+- duplicate component references;
+- duplicate component UUIDs;
+- duplicate pin UUIDs.
+
+**Why:** `compute_delta()` keys components by UUID. A duplicated UUID — e.g.
+hand-copying R2's JSON block to add R3 — makes the new component overwrite the
+existing one in the lookup table. The differ then emits a *value change*
+against the existing symbol (corrupting its value in the schematic) and the
+addition is silently dropped: no symbol, no net labels, no warning (root cause
+of the UT-06 failure, 2026-07-31). Failing loudly protects both hand-edited
+and LLM-generated JSON states.
+
+#### Auto-repair mode (`--repair`, added 2026-08-01)
+
+Passing `--repair` as a 4th argument attempts to fix auto-repairable
+violations in the **modified** JSON before applying:
+
+- missing component/pin UUIDs → fresh UUID assigned;
+- duplicate component UUIDs → the "rightful owner" (the component whose
+  reference matches the original baseline's reference for that UUID, else the
+  first occurrence) keeps it; others get fresh component **and** pin UUIDs;
+- duplicate pin UUIDs → later occurrences get fresh UUIDs.
+
+Duplicate or missing **references** are never auto-repaired (identity is
+ambiguous) — the script still exits 3. On success the repaired JSON is written
+back to the modified-state file so the extension stays consistent, and the
+output includes a `repairs` list. The **original baseline is never repaired**.
+
+The extension surfaces exit-3 violations in a modal dialog with a
+"Fix uuids and retry" button that re-runs the apply with `--repair`
+(`hephaistus.applyDelta` command, `syncPanel.ts`).
+
+#### Added-component data contract (fixed 2026-08-01)
+
+`apply_component_addition_text()` historically read pin→net mappings from a
+`connections` dict (`{"1": "net"}`) that the parser/JSON state does not
+produce — nets live on `pins[].net`. With `connections` absent, additions were
+staged **without net labels, series-insertion warnings, or annotations**. The
+script now derives `connections` from `pins[]` when missing, and reads the
+component value from top-level `value` first (matching `compute_delta()`
+precedence; `properties.Value` may be stale in edited JSON).
+
+**Offset accounting (fixed 2026-08-01):** insertions into the schematic text
+must advance `last_symbol_end` by the length of the *actually inserted* string
+(`'\n\t' + block.replace('\n', '\n\t')`), never by `len(block)` — the replace
+adds one tab per newline. The old `len(label) + 2` accounting made subsequent
+insertions land mid-block (observed: a label uuid sliced in half → KiCad
+"Unterminated delimited string" on load).
+
 **IMPORTANT:** Uses **text-based editing** to preserve all KiCad 10 properties.
+
+#### Per-pin wiring advice (added 2026-08-01)
+
+Every staged component now emits a structured `wiring` recipe in the warning
+payload (`build_wiring_advice()`), rendered in the extension's post-apply
+modal and persisted in `pendingWarnings`:
+
+- `series_insertion` warnings carry per-pin steps: first pin `connect_label`
+  to the existing net; remaining pins `break_wire_new_net` with a suggested
+  new net name (`Net-(<Ref>-Pad<n>)`);
+- `missing_labels` warnings carry `add_label_to_existing_net` steps;
+- components with no series/label problem emit a `wiring_advice` warning
+  (previously they staged silently) with `connect_label` / `new_net` steps.
+
+This is the first increment toward the advice ledger (`use_cases_blueprint.md`
+§2.4): advice is produced and persisted; verification on re-parse is Sprint B.
 
 The script reads the `.kicad_sch` file as text, finds the symbol by UUID,
 locates the `Value` property S-expression, and replaces only the value string.

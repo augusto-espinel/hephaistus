@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import re
+import uuid as uuid_module
 from typing import Dict, List, Any, Optional, Tuple
 
 
@@ -831,6 +832,74 @@ def find_existing_nets_from_json(content: str) -> set:
     return nets
 
 
+def build_wiring_advice(reference: str, connections: Dict[str, str],
+                        existing_nets: set, nets_with_labels: set,
+                        is_series: bool, series_net: Optional[str]) -> List[Dict[str, Any]]:
+    """
+    Build per-pin wiring instructions for a staged component.
+
+    Emitted as structured advice in the warning payload (`wiring` key) so the
+    extension can render a step-by-step recipe and (later) verify completion
+    on re-parse. Actions:
+      - connect_label             -> label already placed at staging; connect it
+      - break_wire_new_net        -> series insertion: this pin forms the NEW net
+      - add_label_to_existing_net -> target net exists but has no label yet
+      - new_net                   -> net does not exist in the schematic yet
+    """
+    steps: List[Dict[str, Any]] = []
+    if not connections:
+        return steps
+
+    ordered_pins = sorted(connections.items(), key=lambda kv: str(kv[0]))
+
+    if is_series and series_net:
+        first = True
+        for pin_num, net_name in ordered_pins:
+            if first:
+                steps.append({
+                    "pin": str(pin_num),
+                    "net": net_name,
+                    "action": "connect_label",
+                    "instruction": f"Connect pin {pin_num} to the existing '{net_name}' side of the broken wire (label placed at staging)."
+                })
+                first = False
+            else:
+                suggested = f"Net-({reference}-Pad{pin_num})"
+                steps.append({
+                    "pin": str(pin_num),
+                    "net": None,
+                    "suggested_net": suggested,
+                    "action": "break_wire_new_net",
+                    "instruction": f"Break the '{series_net}' wire; connect pin {pin_num} to the dangling end with a NEW net label (suggested: '{suggested}')."
+                })
+        return steps
+
+    for pin_num, net_name in ordered_pins:
+        if net_name in existing_nets:
+            if net_name in nets_with_labels:
+                steps.append({
+                    "pin": str(pin_num),
+                    "net": net_name,
+                    "action": "connect_label",
+                    "instruction": f"Connect pin {pin_num} to net '{net_name}' (label placed at staging)."
+                })
+            else:
+                steps.append({
+                    "pin": str(pin_num),
+                    "net": net_name,
+                    "action": "add_label_to_existing_net",
+                    "instruction": f"Add a '{net_name}' label to the existing wire, then connect pin {pin_num}."
+                })
+        else:
+            steps.append({
+                "pin": str(pin_num),
+                "net": net_name,
+                "action": "new_net",
+                "instruction": f"Pin {pin_num} targets new net '{net_name}' (label placed at staging); route a wire to it."
+            })
+    return steps
+
+
 def apply_component_addition_text(content: str, added_components: List[Dict[str, Any]],
                                    modified_json: Dict[str, Any]) -> Tuple[str, List[str], List[Dict[str, Any]]]:
     """
@@ -875,9 +944,18 @@ def apply_component_addition_text(content: str, added_components: List[Dict[str,
     for comp in added_components:
         lib_id = comp.get('libId', '')
         reference = comp.get('reference', 'U?')
-        value = comp.get('properties', {}).get('Value', comp.get('value', ''))
+        # Top-level 'value' wins (same precedence as compute_delta);
+        # properties.Value may be stale in hand/LLM-edited JSON.
+        value = comp.get('value', comp.get('properties', {}).get('Value', ''))
         uuid = comp.get('uuid', generate_uuid())
         connections = comp.get('connections', {})  # {"1": "net_name", "2": "GND"}
+        if not connections:
+            # JSON state contract: nets live on pins[] — derive the map
+            connections = {
+                str(p.get('number')): p.get('net')
+                for p in comp.get('pins', [])
+                if p.get('net')
+            }
         
         # Find the library symbol definition
         lib_symbol = find_lib_symbol_block(content, lib_id)
@@ -916,6 +994,10 @@ def apply_component_addition_text(content: str, added_components: List[Dict[str,
         
         # Check for missing labels
         needs_labels, missing_nets = detect_missing_labels(connections, existing_nets, nets_with_labels)
+
+        # Per-pin wiring advice (rendered in the UI modal, persisted in state)
+        wiring_steps = build_wiring_advice(reference, connections, existing_nets,
+                                           nets_with_labels, is_series, series_net)
         
         if is_series:
             # Create warning annotation
@@ -926,7 +1008,8 @@ def apply_component_addition_text(content: str, added_components: List[Dict[str,
                 "component": reference,
                 "net": series_net,
                 "message": f"⚠ {reference} requires series insertion. Break wire on net '{series_net}' and connect labels.",
-                "action_required": "break_wire"
+                "action_required": "break_wire",
+                "wiring": wiring_steps
             }
             warnings.append(warning)
             changes_applied.append(f"WARNING: {reference} - SERIES INSERTION on net '{series_net}'")
@@ -946,16 +1029,27 @@ def apply_component_addition_text(content: str, added_components: List[Dict[str,
                 "component": reference,
                 "nets": missing_nets,
                 "message": f"⚠ {reference} requires labels on existing nets. Add net labels '{nets_str}' to existing wires.",
-                "action_required": "add_labels"
+                "action_required": "add_labels",
+                "wiring": wiring_steps
             }
             warnings.append(warning)
             changes_applied.append(f"WARNING: {reference} - MISSING LABELS on nets: {nets_str}")
             changes_applied.append(f"  User must add labels to existing wires")
-            
             # Add annotation to schematic
             annotation = create_text_annotation(warning_text, annotation_pos)
             annotations.append(annotation)
-        
+
+        elif wiring_steps:
+            # No series/label problem, but the component still needs wiring —
+            # emit the recipe so the user gets instructions, not silence.
+            warnings.append({
+                "type": "wiring_advice",
+                "component": reference,
+                "message": f"Wiring instructions for {reference} (staged, labels placed).",
+                "action_required": "wire_component",
+                "wiring": wiring_steps
+            })
+
         # Add net labels for connections
         if connections:
             # Extract pin positions from library symbol for label placement
@@ -979,8 +1073,12 @@ def apply_component_addition_text(content: str, added_components: List[Dict[str,
                 
                 # Create and insert label
                 label = create_net_label(net_name, label_pos)
-                content = content[:last_symbol_end] + '\n\t' + label.replace('\n', '\n\t') + content[last_symbol_end:]
-                last_symbol_end += len(label) + 2  # Account for newlines and tab
+                indented_label = '\n\t' + label.replace('\n', '\n\t')
+                content = content[:last_symbol_end] + indented_label + content[last_symbol_end:]
+                # Advance by the length of the ACTUAL inserted text —
+                # replace() makes it longer than len(label) by one tab per
+                # newline; using len(label) corrupts the next insertion.
+                last_symbol_end += len(indented_label)
                 
                 changes_applied.append(f"Added label '{net_name}' at {reference} pin {pin_num}")
         
@@ -991,7 +1089,9 @@ def apply_component_addition_text(content: str, added_components: List[Dict[str,
     
     # Insert all annotations at the end
     for annotation in annotations:
-        content = content[:last_symbol_end] + '\n\t' + annotation.replace('\n', '\n\t') + content[last_symbol_end:]
+        indented_annotation = '\n\t' + annotation.replace('\n', '\n\t')
+        content = content[:last_symbol_end] + indented_annotation + content[last_symbol_end:]
+        last_symbol_end += len(indented_annotation)
     
     return content, changes_applied, warnings
 
@@ -1177,6 +1277,167 @@ def apply_delta_to_schematic(schematic_path: str, delta: Dict[str, Any],
         return False, [f"Error: {e}"], []
 
 
+def validate_state_integrity(state: Dict[str, Any], label: str) -> List[str]:
+    """
+    Validate JSON state integrity BEFORE delta computation.
+
+    compute_delta() keys components by uuid, so a duplicated component uuid
+    (e.g. hand-copying R2's block to add R3) silently reclassifies the new
+    component as a value change on the EXISTING symbol: the addition is
+    dropped without warning and the existing symbol's value is corrupted
+    (root cause of the UT-06 failure, 2026-07-31).
+
+    Returns a list of human-readable violation messages (empty if valid).
+    """
+    errors: List[str] = []
+    components = state.get('components', [])
+
+    # 1. Components must have reference and uuid
+    for idx, comp in enumerate(components):
+        if not comp.get('reference'):
+            errors.append(f"[{label}] component at index {idx} is missing 'reference'")
+        if not comp.get('uuid'):
+            errors.append(
+                f"[{label}] component '{comp.get('reference', f'index {idx}')}' is missing 'uuid'"
+            )
+
+    # 2. Duplicate component references
+    ref_counts: Dict[str, int] = {}
+    for comp in components:
+        ref = comp.get('reference', '<missing>')
+        ref_counts[ref] = ref_counts.get(ref, 0) + 1
+    for ref, count in ref_counts.items():
+        if count > 1:
+            errors.append(f"[{label}] duplicate component reference '{ref}' ({count} occurrences)")
+
+    # 3. Duplicate component uuids
+    uuid_to_refs: Dict[str, List[str]] = {}
+    for comp in components:
+        cuuid = comp.get('uuid', '<missing>')
+        uuid_to_refs.setdefault(cuuid, []).append(comp.get('reference', '<missing>'))
+    for cuuid, refs in uuid_to_refs.items():
+        if len(refs) > 1:
+            errors.append(
+                f"[{label}] duplicate component uuid '{cuuid}' shared by references: {', '.join(refs)}"
+            )
+
+    # 4. Duplicate pin uuids (must be unique across the whole state)
+    pin_uuid_to_owner: Dict[str, str] = {}
+    for comp in components:
+        ref = comp.get('reference', '<missing>')
+        for pin in comp.get('pins', []):
+            puuid = pin.get('uuid')
+            if not puuid:
+                continue
+            owner = f"{ref}.{pin.get('number', '?')}"
+            if puuid in pin_uuid_to_owner:
+                errors.append(
+                    f"[{label}] duplicate pin uuid '{puuid}' shared by "
+                    f"{pin_uuid_to_owner[puuid]} and {owner}"
+                )
+            else:
+                pin_uuid_to_owner[puuid] = owner
+
+    return errors
+
+
+def _new_uuid() -> str:
+    return str(uuid_module.uuid4())
+
+
+def repair_state_integrity(
+    state: Dict[str, Any],
+    original: Optional[Dict[str, Any]],
+    label: str
+) -> Tuple[List[str], List[str]]:
+    """
+    Attempt to auto-repair integrity violations in `state` (mutates in place).
+
+    Repairable:
+      - missing component/pin uuids          -> assign fresh uuid
+      - duplicate component uuids            -> keep the "rightful owner" (the
+        component whose reference matches the original state's reference for
+        that uuid, else the first occurrence); assign fresh component AND pin
+        uuids to the others
+      - duplicate pin uuids                  -> assign fresh uuid to later uses
+
+    Not repairable (ambiguous identity):
+      - missing or duplicate component references
+
+    Returns (repairs, unfixable_errors).
+    """
+    repairs: List[str] = []
+    unfixable: List[str] = []
+    components = state.get('components', [])
+
+    # --- references cannot be auto-repaired ---
+    ref_counts: Dict[str, int] = {}
+    for comp in components:
+        ref = comp.get('reference')
+        if not ref:
+            unfixable.append(f"[{label}] component missing 'reference' — cannot auto-repair")
+        else:
+            ref_counts[ref] = ref_counts.get(ref, 0) + 1
+    for ref, count in ref_counts.items():
+        if count > 1:
+            unfixable.append(
+                f"[{label}] duplicate component reference '{ref}' ({count} occurrences) — cannot auto-repair"
+            )
+    if unfixable:
+        return repairs, unfixable
+
+    orig_ref_by_uuid = {
+        c.get('uuid'): c.get('reference')
+        for c in (original or {}).get('components', [])
+    }
+
+    # --- pass 1: duplicated component uuids ---
+    by_uuid: Dict[str, List[Dict[str, Any]]] = {}
+    for comp in components:
+        by_uuid.setdefault(comp.get('uuid') or '', []).append(comp)
+
+    for cuuid, comps in by_uuid.items():
+        if not cuuid or len(comps) <= 1:
+            continue
+        orig_ref = orig_ref_by_uuid.get(cuuid)
+        owner = next((c for c in comps if c.get('reference') == orig_ref), comps[0])
+        for comp in comps:
+            if comp is owner:
+                continue
+            comp['uuid'] = _new_uuid()
+            for pin in comp.get('pins', []):
+                pin['uuid'] = _new_uuid()
+            repairs.append(
+                f"[{label}] assigned fresh component+pin uuids to '{comp.get('reference')}' "
+                f"(previously duplicated uuid of '{owner.get('reference')}')"
+            )
+
+    # --- pass 2: missing uuids + duplicate pin uuids ---
+    seen_comp_uuids = set()
+    seen_pin_uuids = set()
+    for comp in components:
+        ref = comp.get('reference')
+        if not comp.get('uuid'):
+            comp['uuid'] = _new_uuid()
+            repairs.append(f"[{label}] assigned fresh uuid to component '{ref}' (was missing)")
+        if comp['uuid'] in seen_comp_uuids:  # safety net, should not trigger after pass 1
+            comp['uuid'] = _new_uuid()
+            repairs.append(f"[{label}] assigned fresh uuid to component '{ref}' (duplicate)")
+        seen_comp_uuids.add(comp['uuid'])
+
+        for pin in comp.get('pins', []):
+            owner = f"{ref}.{pin.get('number', '?')}"
+            if not pin.get('uuid'):
+                pin['uuid'] = _new_uuid()
+                repairs.append(f"[{label}] assigned fresh uuid to pin {owner} (was missing)")
+            elif pin['uuid'] in seen_pin_uuids:
+                pin['uuid'] = _new_uuid()
+                repairs.append(f"[{label}] assigned fresh uuid to pin {owner} (duplicate)")
+            seen_pin_uuids.add(pin['uuid'])
+
+    return repairs, unfixable
+
+
 def main():
     if len(sys.argv) < 4:
         print(json.dumps({
@@ -1188,11 +1449,49 @@ def main():
     original_path = sys.argv[1]
     modified_path = sys.argv[2]
     kicad_path = sys.argv[3]
-    
+    repair_mode = '--repair' in sys.argv[4:]
+
     # Load JSON states
     original = load_json(original_path)
     modified = load_json(modified_path)
-    
+
+    # Validate integrity BEFORE computing the delta. Duplicate uuids or
+    # references silently corrupt the result (see docs/architecture.md §4.4).
+    original_errors = validate_state_integrity(original, 'original')
+    modified_errors = validate_state_integrity(modified, 'modified')
+
+    # --repair: attempt to auto-repair the MODIFIED state (fresh uuids for
+    # hand/LLM-added components). The original baseline is never repaired —
+    # it must stay exactly as parsed from KiCad.
+    repairs: List[str] = []
+    if modified_errors and repair_mode and not original_errors:
+        repairs, unfixable = repair_state_integrity(modified, original, 'modified')
+        if unfixable:
+            print(json.dumps({
+                "status": "error",
+                "error": "integrity_validation_failed",
+                "message": "JSON state has integrity problems that cannot be auto-repaired; delta NOT applied.",
+                "violations": unfixable
+            }, indent=2))
+            sys.exit(3)
+        modified_errors = validate_state_integrity(modified, 'modified')
+        if not modified_errors:
+            # Persist repaired state so the extension's JSON stays consistent
+            with open(modified_path, 'w', encoding='utf-8') as f:
+                json.dump(modified, f, indent=2)
+
+    integrity_errors = original_errors + modified_errors
+    if integrity_errors:
+        print(json.dumps({
+            "status": "error",
+            "error": "integrity_validation_failed",
+            "message": "JSON state failed integrity validation; delta NOT applied. "
+                       "Assign fresh uuids to hand-added components and ensure "
+                       "references are unique.",
+            "violations": integrity_errors
+        }, indent=2))
+        sys.exit(3)
+
     # Compute delta
     delta = compute_delta(original, modified)
     
@@ -1221,6 +1520,7 @@ def main():
             "changes_applied": len(changes_log),
             "changes": changes_log,
             "warnings": warnings,
+            "repairs": repairs,
             "delta": delta,
             "backup": kicad_path + '.bak'
         }, indent=2))

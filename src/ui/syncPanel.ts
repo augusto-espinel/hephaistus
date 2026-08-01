@@ -413,7 +413,7 @@ export function registerSyncPanel(context: vscode.ExtensionContext): SyncPanelPr
       provider.refresh();
     }),
 
-    vscode.commands.registerCommand('hephaistus.applyDelta', async () => {
+    vscode.commands.registerCommand('hephaistus.applyDelta', async (options?: { repair?: boolean }) => {
       try {
         // Refresh status first to get current file times
         await provider.refreshAsync();
@@ -572,12 +572,18 @@ export function registerSyncPanel(context: vscode.ExtensionContext): SyncPanelPr
         // Apply delta to KiCad
         vscode.window.setStatusBarMessage('$(sync~spin) HephAIstus: Applying changes...', 5000);
         
-        const result = await applyDeltaToKiCad(baselinePath, jsonPath, kicadFile);
+        const result = await applyDeltaToKiCad(baselinePath, jsonPath, kicadFile, { repair: options?.repair });
         
         if (result.success) {
           // Show warnings if any
           if (result.warnings && result.warnings.length > 0) {
-            const warningMessages = result.warnings.map((w: any) => w.message).join('\n\n');
+            const warningMessages = result.warnings.map((w: any) => {
+              let text = w.message;
+              if (w.wiring && w.wiring.length > 0) {
+                text += '\n\nWiring:\n' + w.wiring.map((s: any) => `  • ${s.instruction}`).join('\n');
+              }
+              return text;
+            }).join('\n\n');
             const action = await vscode.window.showWarningMessage(
               `HephAIstus: Manual action required for ${result.warnings.length} component(s)`,
               { modal: true, detail: warningMessages },
@@ -589,8 +595,11 @@ export function registerSyncPanel(context: vscode.ExtensionContext): SyncPanelPr
               vscode.commands.executeCommand('hephaistus.openKicadSchematic');
             }
           } else {
+            const repairNote = result.repairs && result.repairs.length > 0
+              ? ` (auto-repaired ${result.repairs.length} uuid issue(s))`
+              : '';
             vscode.window.showInformationMessage(
-              `HephAIstus: Applied ${result.changesApplied} change(s) to ${path.basename(kicadFile)}`
+              `HephAIstus: Applied ${result.changesApplied} change(s) to ${path.basename(kicadFile)}${repairNote}`
             );
           }
           
@@ -633,6 +642,16 @@ export function registerSyncPanel(context: vscode.ExtensionContext): SyncPanelPr
           }
           
           provider.refresh();
+        } else if (result.integrityViolations && result.integrityViolations.length > 0) {
+          const action = await vscode.window.showErrorMessage(
+            'HephAIstus: JSON state is invalid — nothing was applied to the schematic.',
+            { modal: true, detail: result.integrityViolations.join('\n') },
+            'Fix uuids and retry',
+            'Cancel'
+          );
+          if (action === 'Fix uuids and retry') {
+            await vscode.commands.executeCommand('hephaistus.applyDelta', { repair: true });
+          }
         } else {
           vscode.window.showErrorMessage(`HephAIstus: Failed to apply changes - ${result.message}`);
         }

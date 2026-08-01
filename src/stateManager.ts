@@ -63,15 +63,11 @@ export interface ProjectState {
     };
 }
 
-// Re-export DeltaWarning from deltaApplyService
-export interface DeltaWarning {
-    type: 'series_insertion' | 'missing_labels' | 'manual_action';
-    component: string;
-    net?: string;
-    nets?: string[];
-    message: string;
-    action_required: string;
-}
+// Single source of truth: deltaApplyService (widened 2026-08-01 with
+// 'wiring_advice' + per-pin wiring steps)
+import type { DeltaWarning } from './services/deltaApplyService';
+export type { DeltaWarning };
+export type { WiringStep } from './services/deltaApplyService';
 
 // --- CONSTANTS ---
 

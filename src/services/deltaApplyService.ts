@@ -74,13 +74,23 @@ function findHephaistusRoot(): string | null {
   return null;
 }
 
+export interface WiringStep {
+  pin: string;
+  net: string | null;
+  suggested_net?: string;
+  action: 'connect_label' | 'break_wire_new_net' | 'add_label_to_existing_net' | 'new_net';
+  instruction: string;
+}
+
 export interface DeltaWarning {
-  type: 'series_insertion' | 'missing_labels' | 'manual_action';
+  type: 'series_insertion' | 'missing_labels' | 'manual_action' | 'wiring_advice';
   component: string;
   net?: string;
   nets?: string[];
   message: string;
   action_required: string;
+  /** Per-pin wiring recipe for staged components. */
+  wiring?: WiringStep[];
 }
 
 export interface DeltaResult {
@@ -88,6 +98,10 @@ export interface DeltaResult {
   changesApplied: number;
   changes?: string[];
   warnings: DeltaWarning[];
+  /** Populated when the Python script rejects the JSON state (exit 3). */
+  integrityViolations?: string[];
+  /** UUID repairs applied when running with { repair: true }. */
+  repairs?: string[];
   delta: {
     valueChanges: Array<{ uuid: string; reference: string; oldValue: string; newValue: string }>;
     addedComponents: any[];
@@ -101,6 +115,8 @@ export interface DeltaResult {
 export interface DeltaOptions {
   createBackup?: boolean;
   dryRun?: boolean;
+  /** Pass --repair to auto-fix duplicate/missing uuids before applying. */
+  repair?: boolean;
 }
 
 /**
@@ -115,7 +131,20 @@ export async function computeDelta(
   const modified = JSON.parse(fs.readFileSync(modifiedJsonPath, 'utf8'));
 
   const origComps = new Map<string, any>((original.components || []).map((c: any) => [c.uuid, c]));
-  const modComps = new Map<string, any>((modified.components || []).map((c: any) => [c.uuid, c]));
+  // Duplicate uuids in hand-edited JSON used to silently collide here (last
+  // write won). Keep the component whose reference matches the original's
+  // reference for that uuid — mirrors the rightful-owner rule of
+  // kiutils_delta_apply.py --repair. The Python side hard-fails on duplicates;
+  // this only protects the preview dialog.
+  const modComps = new Map<string, any>();
+  for (const c of (modified.components || [])) {
+    const existing = modComps.get(c.uuid);
+    if (!existing) {
+      modComps.set(c.uuid, c);
+    } else if (origComps.get(c.uuid)?.reference === c.reference) {
+      modComps.set(c.uuid, c);
+    }
+  }
 
   const valueChanges: any[] = [];
   const addedComponents: any[] = [];
@@ -205,6 +234,9 @@ export async function applyDeltaToKiCad(
 
   return new Promise((resolve) => {
     const args = [scriptPath, originalJsonPath, modifiedJsonPath, kicadFilePath];
+    if (options.repair) {
+      args.push('--repair');
+    }
     
     console.log(`[DeltaApply] Running: ${python} ${args.join(' ')}`);
 
@@ -245,6 +277,7 @@ export async function applyDeltaToKiCad(
               connectionChanges: result.delta?.connection_changes || []
             },
             backup: result.backup || '',
+            repairs: result.repairs || [],
             message: `Applied ${result.changes_applied || 0} change(s) to KiCad schematic`
           });
         } else if (result.status === 'no_changes') {
@@ -256,6 +289,17 @@ export async function applyDeltaToKiCad(
             delta: { valueChanges: [], addedComponents: [], removedComponents: [], connectionChanges: [] },
             backup: '',
             message: 'No changes detected between original and modified JSON'
+          });
+        } else if (result.error === 'integrity_validation_failed') {
+          resolve({
+            success: false,
+            changesApplied: 0,
+            changes: [],
+            warnings: [],
+            integrityViolations: result.violations || [],
+            delta: { valueChanges: [], addedComponents: [], removedComponents: [], connectionChanges: [] },
+            backup: '',
+            message: result.message || 'JSON state failed integrity validation'
           });
         } else {
           resolve({
