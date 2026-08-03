@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import re
+import math
 import uuid as uuid_module
 from typing import Dict, List, Any, Optional, Tuple
 
@@ -649,126 +650,19 @@ def create_symbol_instance(lib_symbol_block: str,
 		(fields_autoplaced yes)
 	)'''
     
+    # Emit (pin "N" (uuid ...)) blocks — required by the KiCad 6+ instance
+    # format; our parser populates symbol.pins from these.
+    pin_nums = sorted(extract_pin_definitions(lib_symbol_block).keys(),
+                      key=lambda s: (not s.isdigit(), int(s) if s.isdigit() else s))
+    if pin_nums:
+        pin_blocks = ''.join(
+            f'\n\t\t(pin "{n}"\n\t\t\t(uuid "{generate_uuid()}")\n\t\t)'
+            for n in pin_nums
+        )
+        tail = instance.rfind('\n')
+        instance = instance[:tail] + pin_blocks + instance[tail:]
+
     return instance
-
-
-def extract_existing_nets(json_state: Dict[str, Any]) -> set:
-    """
-    Extract all net names from the JSON state.
-    
-    Returns a set of net names.
-    """
-    nets = set()
-    for wire in json_state.get('wires', []):
-        if 'net' in wire:
-            nets.add(wire['net'])
-    for junction in json_state.get('junctions', []):
-        if 'net' in junction:
-            nets.add(junction['net'])
-    for comp in json_state.get('components', []):
-        for pin in comp.get('pins', []):
-            if 'net' in pin and pin['net']:
-                nets.add(pin['net'])
-    return nets
-
-
-def extract_nets_with_labels(content: str) -> set:
-    """
-    Extract nets that currently have labels in the KiCad schematic.
-    
-    Returns a set of net names that have labels.
-    """
-    nets_with_labels = set()
-    
-    # Find all (label "net_name" ...) blocks
-    label_pattern = r'\(label\s+"([^"]+)"'
-    for match in re.finditer(label_pattern, content):
-        nets_with_labels.add(match.group(1))
-    
-    # Also check global labels
-    global_label_pattern = r'\(global_label\s+"([^"]+)"'
-    for match in re.finditer(global_label_pattern, content):
-        nets_with_labels.add(match.group(1))
-    
-    # Check hierarchical labels
-    hier_label_pattern = r'\(hierarchical_label\s+"([^"]+)"'
-    for match in re.finditer(hier_label_pattern, content):
-        nets_with_labels.add(match.group(1))
-    
-    return nets_with_labels
-
-
-def detect_series_insertion(connections: Dict[str, str], existing_nets: set) -> Tuple[bool, Optional[str]]:
-    """
-    Detect if component insertion requires breaking existing net.
-    
-    Series insertion: All pins connect to the same existing net.
-    This means the user needs to break the net and insert component.
-    
-    Returns: (is_series_insertion, net_name_if_series)
-    """
-    if not connections:
-        return False, None
-    
-    unique_nets = set(connections.values())
-    
-    # If all pins connect to same existing net → series insertion
-    if len(unique_nets) == 1:
-        net_name = unique_nets.pop()
-        if net_name in existing_nets:
-            return True, net_name
-    
-    return False, None
-
-
-def detect_missing_labels(connections: Dict[str, str], 
-                          existing_nets: set,
-                          nets_with_labels: set) -> Tuple[bool, List[str]]:
-    """
-    Detect if component connects to nets that don't have labels.
-    
-    Parallel insertion: Different pins to different nets.
-    If any of those nets exist but don't have labels, user needs to add them.
-    
-    Returns: (needs_labels, list_of_nets_missing_labels)
-    """
-    if not connections:
-        return False, []
-    
-    unique_nets = set(connections.values())
-    missing_labels = []
-    
-    for net in unique_nets:
-        if net in existing_nets and net not in nets_with_labels:
-            missing_labels.append(net)
-    
-    return len(missing_labels) > 0, missing_labels
-
-
-def create_text_annotation(text: str, position: Tuple[float, float], 
-                            uuid_str: str = None, font_size: float = 1.5) -> str:
-    """
-    Create a KiCad text annotation (non-electrical text).
-    
-    Used for warnings and hints in the schematic.
-    """
-    if uuid_str is None:
-        uuid_str = str(__import__('uuid').uuid4())
-    
-    # Escape special characters for S-expression
-    escaped_text = text.replace('"', '\\"').replace('\n', '\\n')
-    
-    return f'''(text "{escaped_text}"
-	(at {position[0]:.2f} {position[1]:.2f} 0)
-	(effects
-		(font
-			(size {font_size} {font_size})
-			(thickness 0.3)
-		)
-		(justify left)
-	)
-	(uuid "{uuid_str}")
-)'''
 
 
 def create_net_label(net_name: str, position: Tuple[float, float], 
@@ -806,141 +700,647 @@ def create_net_label(net_name: str, position: Tuple[float, float],
 )'''
 
 
-def find_existing_nets_from_json(content: str) -> set:
+# ---------------------------------------------------------------------------
+# Stub-based net restructuring (2026-08-03)
+#
+# The AI expresses series insertions and re-wiring purely as potential (net)
+# re-assignments in the JSON state — e.g. moving R2.2 from 'dc_plus' to
+# 'dc_plus_shunt' while adding R3 across the two potentials. This pass makes
+# it physical: for every ORIGINAL net that loses member pins, all of its
+# wires/junctions/labels are stripped and EVERY former member pin receives a
+# short stub wire + label carrying its NEW net name. Connectivity is then by
+# label name alone, so the schematic is immediately simulatable; the user may
+# redraw physical wires later (or ask the parser for wiring suggestions —
+# future feature).
+# ---------------------------------------------------------------------------
+
+STUB_LENGTH = 5.08   # mm — two 2.54mm grid steps
+POS_TOLERANCE = 0.5  # mm — matches the parser's tolerance
+
+
+def extract_pin_definitions(lib_symbol_block: str) -> Dict[str, Tuple[float, float, float]]:
+    """Extract pin number -> (rel_x, rel_y, angle_deg) from a library symbol block.
+
+    KiCad pin angle points from the connect point INTO the symbol body.
     """
-    Extract existing net names from a KiCad schematic file.
-    
-    Returns a set of net names found in labels.
+    pin_defs: Dict[str, Tuple[float, float, float]] = {}
+    for m in re.finditer(r'\(pin\s', lib_symbol_block):
+        start = m.start()
+        depth = 0
+        end = start
+        for i in range(start, len(lib_symbol_block)):
+            ch = lib_symbol_block[i]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        block = lib_symbol_block[start:end]
+        at_m = re.search(r'\(at\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\)', block)
+        num_m = re.search(r'\(number\s+"([^"]+)"', block)
+        if at_m and num_m:
+            num = num_m.group(1)
+            if num not in pin_defs:  # first unit definition wins
+                pin_defs[num] = (float(at_m.group(1)), float(at_m.group(2)), float(at_m.group(3)))
+    return pin_defs
+
+
+def _rotate(dx: float, dy: float, angle_deg: float) -> Tuple[float, float]:
+    """Same rotation convention as the parser (CCW matrix on KiCad coords)."""
+    rad = math.radians(angle_deg)
+    cos_a, sin_a = math.cos(rad), math.sin(rad)
+    return (dx * cos_a - dy * sin_a, dx * sin_a + dy * cos_a)
+
+
+def _stub_direction_from_lib_angle(pin_angle_deg: float, symbol_rot: float = 0.0) -> Tuple[float, float]:
+    """Unit vector pointing AWAY from the symbol body (stub direction).
+
+    KiCad pin angle points from the connect point INTO the body, in KiCad's
+    y-down coordinates (0 = +x, 90 = +y). The stub extends the opposite way.
     """
-    nets = set()
-    
-    # Find all (label "net_name" ...) blocks
-    label_pattern = r'\(label\s+"([^"]+)"'
-    for match in re.finditer(label_pattern, content):
-        nets.add(match.group(1))
-    
-    # Also check global labels
-    global_label_pattern = r'\(global_label\s+"([^"]+)"'
-    for match in re.finditer(global_label_pattern, content):
-        nets.add(match.group(1))
-    
-    # Check hierarchical labels
-    hier_label_pattern = r'\(hierarchical_label\s+"([^"]+)"'
-    for match in re.finditer(hier_label_pattern, content):
-        nets.add(match.group(1))
-    
-    return nets
+    rad = math.radians(pin_angle_deg)
+    dx, dy = -math.cos(rad), -math.sin(rad)
+    if symbol_rot:
+        dx, dy = _rotate(dx, dy, symbol_rot)
+    if abs(dx) < 1e-9:
+        dx = 0.0
+    if abs(dy) < 1e-9:
+        dy = 0.0
+    return (dx, dy)
 
 
-def build_wiring_advice(reference: str, connections: Dict[str, str],
-                        existing_nets: set, nets_with_labels: set,
-                        is_series: bool, series_net: Optional[str]) -> List[Dict[str, Any]]:
+def _normalize(dx: float, dy: float) -> Tuple[float, float]:
+    mag = math.hypot(dx, dy)
+    if mag == 0:
+        return (0.0, -1.0)  # arbitrary: up
+    return (dx / mag, dy / mag)
+
+
+def _point_on_segment(p: Tuple[float, float], a: Tuple[float, float],
+                      b: Tuple[float, float], tol: float = POS_TOLERANCE) -> bool:
+    """True if point p lies on segment a-b (within tolerance)."""
+    px, py = p
+    ax, ay = a
+    bx, by = b
+    if px < min(ax, bx) - tol or px > max(ax, bx) + tol:
+        return False
+    if py < min(ay, by) - tol or py > max(ay, by) + tol:
+        return False
+    dx, dy = bx - ax, by - ay
+    if dx == 0 and dy == 0:
+        return abs(px - ax) <= tol and abs(py - ay) <= tol
+    dist = abs(dy * px - dx * py + bx * ay - by * ax) / math.hypot(dx, dy)
+    return dist <= tol
+
+
+def _wire_touches_point(wire: Dict[str, Any], p: Tuple[float, float],
+                        tol: float = POS_TOLERANCE) -> bool:
+    """True if any vertex OR segment of the wire touches point p."""
+    pts = wire['points']
+    for pt in pts:
+        if abs(pt[0] - p[0]) <= tol and abs(pt[1] - p[1]) <= tol:
+            return True
+    for i in range(len(pts) - 1):
+        if _point_on_segment(p, pts[i], pts[i + 1], tol):
+            return True
+    return False
+
+
+def _wires_connected(w1: Dict[str, Any], w2: Dict[str, Any],
+                     junctions: List[Tuple[float, float]], tol: float = POS_TOLERANCE) -> bool:
+    """Wires connect via shared points, endpoint-on-segment, or a shared junction."""
+    for p in w1['points']:
+        if _wire_touches_point(w2, p, tol):
+            return True
+    for p in w2['points']:
+        if _wire_touches_point(w1, p, tol):
+            return True
+    for jp in junctions:
+        if _wire_touches_point(w1, jp, tol) and _wire_touches_point(w2, jp, tol):
+            return True
+    return False
+
+
+def build_wire_topology(schematic_path: str) -> Tuple[List[Dict[str, Any]], List[Tuple[float, float]]]:
+    """Load wires and junctions via kiutils.
+
+    Returns (wires, junctions) where wires = [{'uuid', 'points': [(x,y), ...]}]
+    and junctions = [(x,y), ...].
     """
-    Build per-pin wiring instructions for a staged component.
+    from kiutils.schematic import Schematic, Connection
+    sch = Schematic.from_file(schematic_path)
+    wires = []
+    for item in sch.graphicalItems:
+        if isinstance(item, Connection):
+            wires.append({'uuid': item.uuid, 'points': [(p.X, p.Y) for p in item.points]})
+    junctions = [(j.position.X, j.position.Y) for j in sch.junctions]
+    return wires, junctions
 
-    Emitted as structured advice in the warning payload (`wiring` key) so the
-    extension can render a step-by-step recipe and (later) verify completion
-    on re-parse. Actions:
-      - connect_label             -> label already placed at staging; connect it
-      - break_wire_new_net        -> series insertion: this pin forms the NEW net
-      - add_label_to_existing_net -> target net exists but has no label yet
-      - new_net                   -> net does not exist in the schematic yet
+
+def collect_net_island(seed_positions: List[Tuple[float, float]],
+                       wires: List[Dict[str, Any]],
+                       junctions: List[Tuple[float, float]]) -> Tuple[set, set]:
+    """Find the connected component of wires containing any seed position.
+
+    Returns (island_wire_indices, island_junction_positions).
     """
-    steps: List[Dict[str, Any]] = []
-    if not connections:
-        return steps
+    island: set = set()
+    stack: List[int] = []
+    for i, w in enumerate(wires):
+        for s in seed_positions:
+            if _wire_touches_point(w, s):
+                stack.append(i)
+                break
+    while stack:
+        i = stack.pop()
+        if i in island:
+            continue
+        island.add(i)
+        for j in range(len(wires)):
+            if j in island:
+                continue
+            if _wires_connected(wires[i], wires[j], junctions):
+                stack.append(j)
+    island_junctions = set()
+    for jp in junctions:
+        for i in island:
+            if _wire_touches_point(wires[i], jp):
+                island_junctions.add((round(jp[0], 4), round(jp[1], 4)))
+                break
+    return island, island_junctions
 
-    ordered_pins = sorted(connections.items(), key=lambda kv: str(kv[0]))
 
-    if is_series and series_net:
-        first = True
-        for pin_num, net_name in ordered_pins:
-            if first:
-                steps.append({
-                    "pin": str(pin_num),
-                    "net": net_name,
-                    "action": "connect_label",
-                    "instruction": f"Connect pin {pin_num} to the existing '{net_name}' side of the broken wire (label placed at staging)."
-                })
-                first = False
-            else:
-                suggested = f"Net-({reference}-Pad{pin_num})"
-                steps.append({
-                    "pin": str(pin_num),
-                    "net": None,
-                    "suggested_net": suggested,
-                    "action": "break_wire_new_net",
-                    "instruction": f"Break the '{series_net}' wire; connect pin {pin_num} to the dangling end with a NEW net label (suggested: '{suggested}')."
-                })
-        return steps
+def _direction_from_island(pin_pos: Tuple[float, float],
+                           wires: List[Dict[str, Any]], island: set) -> Optional[Tuple[float, float]]:
+    """Direction of the old wire leaving the pin (away from the symbol body)."""
+    for i in island:
+        pts = wires[i]['points']
+        for idx, pt in enumerate(pts):
+            if abs(pt[0] - pin_pos[0]) <= POS_TOLERANCE and abs(pt[1] - pin_pos[1]) <= POS_TOLERANCE:
+                if len(pts) < 2:
+                    continue
+                if idx == 0:
+                    return _normalize(pts[1][0] - pt[0], pts[1][1] - pt[1])
+                if idx == len(pts) - 1:
+                    return _normalize(pts[-2][0] - pt[0], pts[-2][1] - pt[1])
+                return _normalize(pts[idx + 1][0] - pt[0], pts[idx + 1][1] - pt[1])
+        for k in range(len(pts) - 1):
+            if _point_on_segment(pin_pos, pts[k], pts[k + 1]):
+                return _normalize(pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1])
+    return None
 
-    for pin_num, net_name in ordered_pins:
-        if net_name in existing_nets:
-            if net_name in nets_with_labels:
-                steps.append({
-                    "pin": str(pin_num),
-                    "net": net_name,
-                    "action": "connect_label",
-                    "instruction": f"Connect pin {pin_num} to net '{net_name}' (label placed at staging)."
-                })
-            else:
-                steps.append({
-                    "pin": str(pin_num),
-                    "net": net_name,
-                    "action": "add_label_to_existing_net",
-                    "instruction": f"Add a '{net_name}' label to the existing wire, then connect pin {pin_num}."
-                })
-        else:
-            steps.append({
-                "pin": str(pin_num),
-                "net": net_name,
-                "action": "new_net",
-                "instruction": f"Pin {pin_num} targets new net '{net_name}' (label placed at staging); route a wire to it."
+
+def _pin_geometry_from_content(content: str, comp_uuid: str,
+                               pin_num: str) -> Optional[Tuple[Tuple[float, float], Tuple[float, float]]]:
+    """Compute (absolute_position, stub_direction) for a pin from schematic text.
+
+    Fallback when the JSON state lacks pin positions. Mirrors the parser's math.
+    """
+    sym = find_symbol_block(content, comp_uuid)
+    if not sym:
+        return None
+    block = sym[2]
+    at_m = re.search(r'\(at\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\)', block)
+    lib_m = re.search(r'\(lib_id\s+"([^"]+)"\)', block)
+    if not at_m or not lib_m:
+        return None
+    sx, sy, rot = float(at_m.group(1)), float(at_m.group(2)), float(at_m.group(3))
+    lib = find_lib_symbol_block(content, lib_m.group(1))
+    if not lib:
+        return None
+    pin_defs = extract_pin_definitions(lib[2])
+    if pin_num not in pin_defs:
+        return None
+    rel_x, rel_y, pin_angle = pin_defs[pin_num]
+    rx, ry = _rotate(rel_x, rel_y, rot)
+    return ((sx + rx, sy + ry), _stub_direction_from_lib_angle(pin_angle, rot))
+
+
+def create_wire_block(p1: Tuple[float, float], p2: Tuple[float, float],
+                      uuid_str: Optional[str] = None) -> str:
+    """Create a KiCad 10 wire block."""
+    if uuid_str is None:
+        uuid_str = generate_uuid()
+    return f'''(wire
+\t\t(pts
+\t\t\t(xy {p1[0]:.2f} {p1[1]:.2f}) (xy {p2[0]:.2f} {p2[1]:.2f})
+\t\t)
+\t\t(stroke
+\t\t\t(width 0)
+\t\t\t(type default)
+\t\t)
+\t\t(uuid "{uuid_str}")
+\t)'''
+
+
+def _find_blocks(content: str, keyword: str) -> List[Tuple[int, int, str]]:
+    """Find all (keyword ...) blocks. keyword is matched literally after '('."""
+    blocks = []
+    pattern = r'\(' + keyword + r'[\s"]'
+    for m in re.finditer(pattern, content):
+        start = m.start()
+        depth = 0
+        end = start
+        for i in range(start, len(content)):
+            if content[i] == '(':
+                depth += 1
+            elif content[i] == ')':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        blocks.append((start, end, content[start:end]))
+    return blocks
+
+
+def remove_net_geometry(content: str, island_wire_uuids: set,
+                        island_junctions: set, label_names: set) -> Tuple[str, int, int, int]:
+    """Remove wire/junction/label blocks belonging to a cleared net.
+
+    Returns (content, wires_removed, junctions_removed, labels_removed).
+    """
+    spans: List[Tuple[int, int]] = []
+    n_wires = n_junctions = n_labels = 0
+    for start, end, block in _find_blocks(content, 'wire'):
+        m = re.search(r'\(uuid\s+"([^"]+)"\)', block)
+        if m and m.group(1) in island_wire_uuids:
+            spans.append((start, end))
+            n_wires += 1
+    for start, end, block in _find_blocks(content, 'junction'):
+        m = re.search(r'\(at\s+([-\d.]+)\s+([-\d.]+)\)', block)
+        if m and (round(float(m.group(1)), 4), round(float(m.group(2)), 4)) in island_junctions:
+            spans.append((start, end))
+            n_junctions += 1
+    for start, end, block in _find_blocks(content, 'label'):
+        m = re.match(r'\(label\s+"([^"]+)"', block)
+        if m and m.group(1) in label_names:
+            spans.append((start, end))
+            n_labels += 1
+    for start, end in sorted(spans, reverse=True):
+        content = content[:start] + content[end:]
+    return content, n_wires, n_junctions, n_labels
+
+
+def _append_blocks_after_last_symbol(content: str, blocks: List[str]) -> str:
+    """Insert top-level blocks after the last placed symbol instance.
+
+    Advances by the ACTUAL inserted string length (post-indentation) — see the
+    offset-accounting rule in docs/architecture.md §4.4.
+    """
+    if not blocks:
+        return content
+    start, end, _ = find_symbol_instances_section(content)
+    if end == 0:
+        end = content.rfind(')')
+    insertion = ''.join('\n\t' + b.replace('\n', '\n\t') for b in blocks)
+    return content[:end] + insertion + content[end:]
+
+
+def _make_stub(pin_pos: Tuple[float, float], direction: Tuple[float, float],
+               net_name: str) -> List[str]:
+    """Stub = short wire from the pin + label at its free end."""
+    end = (round(pin_pos[0] + direction[0] * STUB_LENGTH, 2),
+           round(pin_pos[1] + direction[1] * STUB_LENGTH, 2))
+    return [create_wire_block(pin_pos, end), create_net_label(net_name, end)]
+
+
+def analyze_net_migrations(original: Dict[str, Any], modified: Dict[str, Any]
+                           ) -> Tuple[Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]]]:
+    """Compare pin net assignments between original and modified states.
+
+    Returns (migrations, gains):
+      migrations: {origin_net: [{uuid, reference, pin, new_net}]} — pins that LEFT a net
+                  (new_net may be '' meaning the pin was disconnected)
+      gains:      [{uuid, reference, pin, new_net}] — previously unconnected pins
+                  that GAINED a net (stub-only, no wire clearing)
+    """
+    orig_pins: Dict[Tuple[str, str], Tuple[str, str]] = {}
+    for comp in original.get('components', []):
+        for pin in comp.get('pins', []):
+            orig_pins[(comp.get('uuid', ''), str(pin.get('number')))] = (
+                pin.get('net', ''), comp.get('reference', ''))
+
+    migrations: Dict[str, List[Dict[str, Any]]] = {}
+    gains: List[Dict[str, Any]] = []
+    for comp in modified.get('components', []):
+        cuuid = comp.get('uuid', '')
+        ref = comp.get('reference', '')
+        for pin in comp.get('pins', []):
+            key = (cuuid, str(pin.get('number')))
+            if key not in orig_pins:
+                continue  # new component — handled by the addition path
+            old_net, _ = orig_pins[key]
+            new_net = pin.get('net', '')
+            if old_net == new_net:
+                continue
+            entry = {'uuid': cuuid, 'reference': ref, 'pin': key[1], 'new_net': new_net}
+            if old_net:
+                migrations.setdefault(old_net, []).append(entry)
+            elif new_net:
+                gains.append(entry)
+    return migrations, gains
+
+
+def apply_net_restructure(content: str, schematic_path: str,
+                          original: Dict[str, Any], modified: Dict[str, Any]
+                          ) -> Tuple[str, List[str], List[Dict[str, Any]]]:
+    """Clear-and-stub pass for nets whose pin assignments changed.
+
+    For each original net that loses member pins: remove ALL its wires,
+    junctions and labels, then place a stub (wire + label) on every former
+    member pin carrying its NEW net name. Previously unconnected pins that
+    gained a net receive a stub as well.
+    """
+    changes: List[str] = []
+    warnings: List[Dict[str, Any]] = []
+    migrations, gains = analyze_net_migrations(original, modified)
+    if not migrations and not gains:
+        return content, changes, warnings
+
+    wires, junctions = build_wire_topology(schematic_path)
+
+    # Original pin table: (uuid, pin) -> (net, reference, position)
+    orig_pin_table: Dict[Tuple[str, str], Tuple[str, str, Tuple[float, float]]] = {}
+    for comp in original.get('components', []):
+        ref = comp.get('reference', '')
+        for pin in comp.get('pins', []):
+            pos = pin.get('position') or {}
+            orig_pin_table[(comp.get('uuid', ''), str(pin.get('number')))] = (
+                pin.get('net', ''), ref, (pos.get('x', 0.0), pos.get('y', 0.0)))
+
+    mod_net: Dict[Tuple[str, str], str] = {}
+    mod_uuids = set()
+    for comp in modified.get('components', []):
+        mod_uuids.add(comp.get('uuid', ''))
+        for pin in comp.get('pins', []):
+            mod_net[(comp.get('uuid', ''), str(pin.get('number')))] = pin.get('net', '')
+
+    stub_blocks: List[str] = []
+
+    for origin_net, moved in migrations.items():
+        all_members = [(k, v) for k, v in orig_pin_table.items() if v[0] == origin_net]
+        surviving = [(k, v) for k, v in all_members if k[0] in mod_uuids]
+
+        # Power symbols anchor their net — they cannot be moved to a new net.
+        moved_refs = {m['reference'] for m in moved}
+        power_moved = [v[1] for k, v in all_members
+                       if v[1].startswith('#PWR') and v[1] in moved_refs]
+        if power_moved:
+            warnings.append({
+                "type": "power_anchor_move",
+                "net": origin_net,
+                "components": power_moved,
+                "message": f"⚠ Power symbol(s) {', '.join(power_moved)} anchor net "
+                           f"'{origin_net}' and cannot be moved. Net restructure skipped.",
+                "action_required": "fix_net_assignment"
             })
-    return steps
+            changes.append(f"WARNING: net '{origin_net}' restructure skipped (power anchor move)")
+            continue
+
+        seeds = [v[2] for k, v in all_members]
+        island, island_junctions = collect_net_island(seeds, wires, junctions)
+        island_uuids = {wires[i]['uuid'] for i in island}
+
+        # Directions from the OLD wiring (computed before removal)
+        directions: Dict[Tuple[str, str], Optional[Tuple[float, float]]] = {}
+        for (cuuid, pnum), (net, ref, pos) in surviving:
+            directions[(cuuid, pnum)] = _direction_from_island(pos, wires, island)
+
+        content, n_wires, n_junc, n_labels = remove_net_geometry(
+            content, island_uuids, island_junctions, {origin_net})
+
+        stubbed: List[str] = []
+        for (cuuid, pnum), (net, ref, pos) in surviving:
+            if ref.startswith('#PWR'):
+                continue  # power symbols need no stub — they anchor the net
+            new_net = mod_net.get((cuuid, pnum), origin_net)
+            if not new_net:
+                changes.append(f"  disconnected {ref}.{pnum} (was '{origin_net}')")
+                continue
+            d = directions.get((cuuid, pnum))
+            pos_ok = pos and pos != (0.0, 0.0)
+            if d is None or not pos_ok:
+                geom = _pin_geometry_from_content(content, cuuid, pnum)
+                if geom:
+                    if not pos_ok:
+                        pos = geom[0]
+                    if d is None:
+                        d = geom[1]
+            if d is None:
+                d = (0.0, -1.0)
+            stub_blocks.extend(_make_stub(pos, d, new_net))
+            stubbed.append(f"{ref}.{pnum} → '{new_net}'")
+
+        changes.append(
+            f"Net '{origin_net}' restructured: removed {n_wires} wires, "
+            f"{n_junc} junctions, {n_labels} labels; placed {len(stubbed)} stubs")
+        for s in stubbed:
+            changes.append(f"  stub {s}")
+
+    # Pins that gained a net from unconnected state: stub only, no clearing.
+    for g in gains:
+        geom = _pin_geometry_from_content(content, g['uuid'], g['pin'])
+        if geom is None:
+            warnings.append({
+                "type": "stub_failed",
+                "component": g['reference'],
+                "message": f"⚠ Could not locate {g['reference']}.{g['pin']} to place stub "
+                           f"for net '{g['new_net']}'.",
+                "action_required": "wire_manually"
+            })
+            continue
+        stub_blocks.extend(_make_stub(geom[0], geom[1], g['new_net']))
+        changes.append(f"  stub {g['reference']}.{g['pin']} → '{g['new_net']}' (was unconnected)")
+
+    content = _append_blocks_after_last_symbol(content, stub_blocks)
+    return content, changes, warnings
+
+
+# ---------------------------------------------------------------------------
+# Library symbol embedding
+#
+# KiCad schematics embed every used symbol in (lib_symbols ...). When the AI
+# adds a component whose libId is not embedded yet, resolve it against the
+# user's symbol libraries (sym-lib-table → .kicad_sym) and embed a copy.
+# If the symbol cannot be found, emit a warning — the legitimate case where
+# the user must import/provide the library in KiCad first.
+# ---------------------------------------------------------------------------
+
+def _ensure_kicad_env() -> None:
+    """Populate KICAD*_SYMBOL_DIR env vars (mirrors the parser's setup)."""
+    for base in ['/Applications/KiCad/KiCad.app/Contents/SharedSupport',
+                 '/usr/share/kicad', '/usr/local/share/kicad']:
+        symbols_path = os.path.join(base, 'symbols')
+        if os.path.isdir(symbols_path):
+            for version in ['6', '7', '8', '9', '10', '']:
+                prefix = f'KICAD{version}_' if version else 'KICAD_'
+                os.environ.setdefault(f'{prefix}SYMBOL_DIR', symbols_path)
+            break
+
+
+def _resolve_symbol_library(nickname: str, schematic_dir: str) -> Optional[str]:
+    """Map a library nickname to a .kicad_sym path via sym-lib-table or heuristics."""
+    _ensure_kicad_env()
+    tables: List[str] = []
+    project_table = os.path.join(schematic_dir, 'sym-lib-table')
+    if os.path.exists(project_table):
+        tables.append(project_table)
+    pref_root = os.path.expanduser('~/Library/Preferences/kicad')
+    if os.path.isdir(pref_root):
+        for ver in sorted(os.listdir(pref_root), reverse=True):
+            t = os.path.join(pref_root, ver, 'sym-lib-table')
+            if os.path.exists(t):
+                tables.append(t)
+    for table in tables:
+        try:
+            with open(table, 'r', encoding='utf-8') as f:
+                txt = f.read()
+        except OSError:
+            continue
+        m = re.search(r'\(lib\s+\(name\s+"' + re.escape(nickname) + r'"\).*?\(uri\s+"([^"]+)"\)',
+                      txt, re.S)
+        if m:
+            uri = m.group(1)
+            uri = re.sub(r'\$\{([^}]+)\}', lambda mm: os.environ.get(mm.group(1), mm.group(0)), uri)
+            uri = re.sub(r'\$\(([^)]+)\)', lambda mm: os.environ.get(mm.group(1), mm.group(0)), uri)
+            if os.path.exists(uri):
+                return uri
+    # Heuristic: <nickname.lower()>.kicad_sym in the KiCad symbol dir
+    for key, val in os.environ.items():
+        if key.endswith('SYMBOL_DIR') and os.path.isdir(val):
+            cand = os.path.join(val, nickname.lower() + '.kicad_sym')
+            if os.path.exists(cand):
+                return cand
+    return None
+
+
+def _extract_symbol_entry(sym_file: str, entry_name: str, lib_id: str) -> Optional[str]:
+    """Extract a top-level (symbol "<entry>" ...) block from a .kicad_sym file
+    and rename it to the full lib_id for embedding in lib_symbols."""
+    try:
+        with open(sym_file, 'r', encoding='utf-8') as f:
+            txt = f.read()
+    except OSError:
+        return None
+    # Top-level entries are indented with exactly one tab
+    m = re.search(r'(?m)^\t\(symbol\s+"' + re.escape(entry_name) + r'"(?=[\s)])', txt)
+    if not m:
+        return None
+    start = m.start()
+    depth = 0
+    end = start
+    for i in range(start, len(txt)):
+        if txt[i] == '(':
+            depth += 1
+        elif txt[i] == ')':
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    block = txt[start:end]
+    # Dedent one tab (lib file base indent) so the block starts at column 0
+    lines = block.split('\n')
+    dedented = '\n'.join(l[1:] if l.startswith('\t') else l for l in lines)
+    dedented = dedented.replace(f'(symbol "{entry_name}"', f'(symbol "{lib_id}"', 1)
+    return dedented
+
+
+def _insert_into_lib_symbols(content: str, lib_block: str) -> str:
+    """Insert a library symbol block into the schematic's lib_symbols section."""
+    m = re.search(r'\(lib_symbols', content)
+    if not m:
+        return content
+    depth = 0
+    end = None
+    for i in range(m.start(), len(content)):
+        if content[i] == '(':
+            depth += 1
+        elif content[i] == ')':
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end is None:
+        return content
+    insertion = '\n\t\t' + lib_block.replace('\n', '\n\t') + '\n\t'
+    return content[:end] + insertion + content[end:]
+
+
+def ensure_lib_symbol_embedded(content: str, lib_id: str,
+                               schematic_dir: str) -> Tuple[str, bool, str]:
+    """Ensure lib_id is present in the schematic's lib_symbols section.
+
+    Returns (content, success, message). On failure the content is unchanged
+    and the message explains what to do (import the library in KiCad).
+    """
+    if find_lib_symbol_block(content, lib_id) is not None:
+        return content, True, 'already embedded'
+    if ':' in lib_id:
+        nickname, entry_name = lib_id.split(':', 1)
+    else:
+        nickname, entry_name = '', lib_id
+    sym_file = _resolve_symbol_library(nickname, schematic_dir) if nickname else None
+    if not sym_file:
+        return content, False, (f"no symbol library found for nickname '{nickname}' — "
+                                f"add it to KiCad's symbol library table")
+    block = _extract_symbol_entry(sym_file, entry_name, lib_id)
+    if block is None:
+        return content, False, f"symbol '{entry_name}' not found in {sym_file}"
+    if '(extends' in block:
+        return content, False, (f"symbol '{lib_id}' uses library inheritance (extends) "
+                                f"which is not yet supported for embedding")
+    content = _insert_into_lib_symbols(content, block)
+    return content, True, f"embedded from {sym_file}"
 
 
 def apply_component_addition_text(content: str, added_components: List[Dict[str, Any]],
-                                   modified_json: Dict[str, Any]) -> Tuple[str, List[str], List[Dict[str, Any]]]:
+                                   schematic_dir: str) -> Tuple[str, List[str], List[Dict[str, Any]]]:
     """
     Add components using text-based editing.
-    
-    Creates STUB connections with net labels - user must verify connections.
-    Detects series insertions and missing labels, adds warning annotations.
-    
+
+    Each new component is placed at a staging area and every connected pin
+    receives a stub (short wire + net label), so the schematic is electrically
+    complete by label-name connectivity alone. Missing library symbols are
+    embedded from the user's KiCad symbol libraries when possible.
+
     Returns (modified_content, list_of_changes_applied, list_of_warnings).
     """
-    changes_applied = []
-    warnings = []
-    
-    # Extract existing nets from both JSON and schematic
-    existing_nets_json = extract_existing_nets(modified_json)
-    existing_nets_sch = find_existing_nets_from_json(content)
-    existing_nets = existing_nets_json | existing_nets_sch
-    
-    # Extract nets that already have labels
-    nets_with_labels = extract_nets_with_labels(content)
-    
+    changes_applied: List[str] = []
+    warnings: List[Dict[str, Any]] = []
+
+    # Embed missing library symbols FIRST — the insertion shifts all later
+    # offsets, so it must happen before we locate the append point.
+    lib_failures: Dict[str, str] = {}
+    for comp in added_components:
+        lib_id = comp.get('libId', '')
+        if not lib_id or lib_id in lib_failures:
+            continue
+        if find_lib_symbol_block(content, lib_id) is None:
+            content, ok, msg = ensure_lib_symbol_embedded(content, lib_id, schematic_dir)
+            if ok:
+                changes_applied.append(f"Embedded library symbol '{lib_id}' ({msg})")
+            else:
+                lib_failures[lib_id] = msg
+
     # Find the last symbol instance in KiCad 10 format
     last_symbol = find_symbol_instances_section(content)
-    
+
     if last_symbol == (0, 0, ''):
         changes_applied.append("ERROR: Could not find any existing symbols to append after")
         return content, changes_applied, warnings
-    
+
     last_symbol_start, last_symbol_end, last_symbol_block = last_symbol
-    
+
     # Find bounding box of existing symbols for staging position
     min_x, min_y, max_x, max_y = find_existing_symbols_bounds(content)
-    
+
     # Staging position: offset from the right edge of existing components
     staging_offset = 25.4  # 25.4mm = 1 inch in KiCad units
     staging_x = max_x + staging_offset
     staging_y = min_y
-    
-    # Track where to insert annotations (after all components)
-    annotations = []
-    
+
     for comp in added_components:
         lib_id = comp.get('libId', '')
         reference = comp.get('reference', 'U?')
@@ -956,20 +1356,30 @@ def apply_component_addition_text(content: str, added_components: List[Dict[str,
                 for p in comp.get('pins', [])
                 if p.get('net')
             }
-        
-        # Find the library symbol definition
+
+        # Library symbol must exist (embedded above or already present)
+        if lib_id in lib_failures:
+            warnings.append({
+                "type": "missing_library_symbol",
+                "component": reference,
+                "message": f"⚠ {reference}: library symbol '{lib_id}' could not be embedded "
+                           f"({lib_failures[lib_id]}). Import it in KiCad, then re-apply.",
+                "action_required": "import_symbol"
+            })
+            changes_applied.append(f"WARNING: {reference} skipped - {lib_failures[lib_id]}")
+            continue
+
         lib_symbol = find_lib_symbol_block(content, lib_id)
         if lib_symbol is None:
-            changes_applied.append(f"WARNING: Library symbol '{lib_id}' not found. "
-                                   f"Add it to KiCad first, then try again.")
+            changes_applied.append(f"WARNING: Library symbol '{lib_id}' not found unexpectedly.")
             continue
-        
+
         start, end, lib_symbol_block = lib_symbol
-        
+
         # Calculate staging position (offset for each new component)
         position = (staging_x, staging_y)
         staging_y += staging_offset  # Move down for next component
-        
+
         # Create symbol instance
         try:
             instance = create_symbol_instance(
@@ -982,138 +1392,60 @@ def apply_component_addition_text(content: str, added_components: List[Dict[str,
         except ValueError as e:
             changes_applied.append(f"WARNING: Could not create instance for {reference}: {e}")
             continue
-        
+
+        # Append an (instances ...) block cloned from an existing symbol —
+        # KiCad requires it for the instance to belong to the sheet/project.
+        if last_symbol_block:
+            im = re.search(r'\(instances', last_symbol_block)
+            if im:
+                depth = 0
+                iend = im.start()
+                for i in range(im.start(), len(last_symbol_block)):
+                    if last_symbol_block[i] == '(':
+                        depth += 1
+                    elif last_symbol_block[i] == ')':
+                        depth -= 1
+                        if depth == 0:
+                            iend = i + 1
+                            break
+                inst_block = last_symbol_block[im.start():iend]
+                inst_block = re.sub(r'\(reference\s+"[^"]*"\)',
+                                    f'(reference "{reference}")', inst_block, count=1)
+                tail = instance.rfind('\n')
+                instance = (instance[:tail] + '\n\t\t'
+                            + inst_block.replace('\n', '\n\t') + instance[tail:])
+
         # Insert after the last symbol instance
         insert_pos = last_symbol_end
         indented_instance = '\n\t' + instance.replace('\n', '\n\t')
         content = content[:insert_pos] + indented_instance + content[insert_pos:]
         last_symbol_end = insert_pos + len(indented_instance)
-        
-        # Check for series insertion
-        is_series, series_net = detect_series_insertion(connections, existing_nets)
-        
-        # Check for missing labels
-        needs_labels, missing_nets = detect_missing_labels(connections, existing_nets, nets_with_labels)
 
-        # Per-pin wiring advice (rendered in the UI modal, persisted in state)
-        wiring_steps = build_wiring_advice(reference, connections, existing_nets,
-                                           nets_with_labels, is_series, series_net)
-        
-        if is_series:
-            # Create warning annotation
-            warning_text = f"⚠ {reference} requires series insertion.\nBreak wire on net '{series_net}' and connect labels."
-            annotation_pos = (position[0], position[1] + 5.0)  # Below component
-            warning = {
-                "type": "series_insertion",
-                "component": reference,
-                "net": series_net,
-                "message": f"⚠ {reference} requires series insertion. Break wire on net '{series_net}' and connect labels.",
-                "action_required": "break_wire",
-                "wiring": wiring_steps
-            }
-            warnings.append(warning)
-            changes_applied.append(f"WARNING: {reference} - SERIES INSERTION on net '{series_net}'")
-            changes_applied.append(f"  User must break wire and connect labels manually")
-            
-            # Add annotation to schematic
-            annotation = create_text_annotation(warning_text, annotation_pos)
-            annotations.append(annotation)
-        
-        elif needs_labels:
-            # Create warning for missing labels
-            nets_str = "', '".join(missing_nets)
-            warning_text = f"⚠ {reference} requires labels on existing nets.\nAdd net labels '{nets_str}' to existing wires."
-            annotation_pos = (position[0], position[1] + 5.0)  # Below component
-            warning = {
-                "type": "missing_labels",
-                "component": reference,
-                "nets": missing_nets,
-                "message": f"⚠ {reference} requires labels on existing nets. Add net labels '{nets_str}' to existing wires.",
-                "action_required": "add_labels",
-                "wiring": wiring_steps
-            }
-            warnings.append(warning)
-            changes_applied.append(f"WARNING: {reference} - MISSING LABELS on nets: {nets_str}")
-            changes_applied.append(f"  User must add labels to existing wires")
-            # Add annotation to schematic
-            annotation = create_text_annotation(warning_text, annotation_pos)
-            annotations.append(annotation)
+        changes_applied.append(f"Added {reference} ({lib_id}) at staging position "
+                               f"({position[0]:.1f}, {position[1]:.1f})")
 
-        elif wiring_steps:
-            # No series/label problem, but the component still needs wiring —
-            # emit the recipe so the user gets instructions, not silence.
-            warnings.append({
-                "type": "wiring_advice",
-                "component": reference,
-                "message": f"Wiring instructions for {reference} (staged, labels placed).",
-                "action_required": "wire_component",
-                "wiring": wiring_steps
-            })
-
-        # Add net labels for connections
+        # Stub every connected pin: short wire from the pin + label at its end.
+        # Staged instances are unrotated (angle 0), so pin offsets apply directly.
         if connections:
-            # Extract pin positions from library symbol for label placement
-            pin_positions = extract_pin_positions_from_symbol(lib_symbol_block)
-            
+            pin_defs = extract_pin_definitions(lib_symbol_block)
+            stub_blocks: List[str] = []
             for pin_num, net_name in connections.items():
                 if not net_name:
                     continue
-                
-                # Calculate label position based on pin position
-                # Label offset from pin (small offset toward outside)
-                if pin_num in pin_positions:
-                    pin_pos = pin_positions[pin_num]
-                    # Offset label from pin position
-                    label_offset = 2.54  # 2.54mm offset
-                    label_pos = (position[0] + pin_pos[0] + label_offset, 
-                                position[1] + pin_pos[1])
+                pd = pin_defs.get(str(pin_num))
+                if pd:
+                    pin_abs = (position[0] + pd[0], position[1] + pd[1])
+                    direction = _stub_direction_from_lib_angle(pd[2])
                 else:
-                    # Default position if pin not found
-                    label_pos = (position[0] + 5.0, position[1])
-                
-                # Create and insert label
-                label = create_net_label(net_name, label_pos)
-                indented_label = '\n\t' + label.replace('\n', '\n\t')
-                content = content[:last_symbol_end] + indented_label + content[last_symbol_end:]
-                # Advance by the length of the ACTUAL inserted text —
-                # replace() makes it longer than len(label) by one tab per
-                # newline; using len(label) corrupts the next insertion.
-                last_symbol_end += len(indented_label)
-                
-                changes_applied.append(f"Added label '{net_name}' at {reference} pin {pin_num}")
-        
-        if not is_series and not needs_labels:
-            changes_applied.append(f"Added {reference} ({lib_id}) at staging position ({position[0]:.1f}, {position[1]:.1f})")
-            if connections:
-                changes_applied.append(f"  Labels: {', '.join(f'{k}={v}' for k, v in connections.items())}")
-    
-    # Insert all annotations at the end
-    for annotation in annotations:
-        indented_annotation = '\n\t' + annotation.replace('\n', '\n\t')
-        content = content[:last_symbol_end] + indented_annotation + content[last_symbol_end:]
-        last_symbol_end += len(indented_annotation)
-    
+                    pin_abs = (position[0], position[1])
+                    direction = (1.0, 0.0)
+                stub_blocks.extend(_make_stub(pin_abs, direction, net_name))
+                changes_applied.append(f"Stub {reference}.{pin_num} → '{net_name}'")
+            content = _append_blocks_after_last_symbol(content, stub_blocks)
+
     return content, changes_applied, warnings
 
 
-def extract_pin_positions_from_symbol(symbol_block: str) -> Dict[str, Tuple[float, float]]:
-    """
-    Extract pin positions from a library symbol definition.
-    
-    Returns a dict mapping pin number to (x, y) position.
-    """
-    pin_positions = {}
-    
-    # Find pin definitions in the symbol
-    # KiCad 10 format: (pin "1" (at x y angle) ...)
-    pin_pattern = r'\(pin\s+"(\d+)"\s+\(at\s+([\d.\-]+)\s+([\d.\-]+)'
-    for match in re.finditer(pin_pattern, symbol_block):
-        pin_num = match.group(1)
-        x = float(match.group(2))
-        y = float(match.group(3))
-        pin_positions[pin_num] = (x, y)
-    
-    return pin_positions
 
 
 def apply_component_removal_text(content: str, removed_components: List[Dict[str, Any]], 
@@ -1243,20 +1575,34 @@ def apply_delta_to_schematic(schematic_path: str, delta: Dict[str, Any],
                 )
                 changes_applied.extend(removal_changes)
         
-        # 3. Handle added components (text-based addition with net labels)
+        # 3. Net restructuring (stub pass): for every original net that loses
+        #    member pins (series insertion / re-wiring), strip its wires,
+        #    junctions and labels, then give every former member pin a stub
+        #    (wire + label) carrying its NEW net name. Previously unconnected
+        #    pins that gained a net receive a stub as well.
+        if original_json is not None and modified_json is not None:
+            content, restructure_changes, restructure_warnings = apply_net_restructure(
+                content, schematic_path, original_json, modified_json
+            )
+            changes_applied.extend(restructure_changes)
+            warnings.extend(restructure_warnings)
+
+        # 4. Handle added components (staging placement + stub connections,
+        #    with automatic library symbol embedding)
         if delta.get('added_components'):
-            if modified_json is None:
-                changes_applied.append("WARNING: modified_json required for component addition")
-            else:
-                content, addition_changes, addition_warnings = apply_component_addition_text(
-                    content, delta['added_components'], modified_json
-                )
-                changes_applied.extend(addition_changes)
-                warnings.extend(addition_warnings)
-        
-        # 4. Handle connection changes (TODO: implement wire reconnection)
+            content, addition_changes, addition_warnings = apply_component_addition_text(
+                content, delta['added_components'],
+                os.path.dirname(os.path.abspath(schematic_path))
+            )
+            changes_applied.extend(addition_changes)
+            warnings.extend(addition_warnings)
+
+        # 5. Connection changes were realized by the restructure pass (step 3)
         for change in delta.get('connection_changes', []):
-            changes_applied.append(f"TODO: Reconnect {change['reference']}.{change['pin']} → {change['new_net']}")
+            changes_applied.append(
+                f"Reconnect {change['reference']}.{change['pin']}: "
+                f"{change['old_net'] or '(unconnected)'} → {change['new_net']} (stub)"
+            )
         
         # Create backup before saving
         backup_path = schematic_path + '.bak'

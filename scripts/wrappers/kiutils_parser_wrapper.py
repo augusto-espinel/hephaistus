@@ -135,12 +135,14 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
             
             return positions_with_net, visited_wires
         
-        # Build net coverage: which positions belong to which net
+        # Build net coverage: which positions belong to which net.
+        # Multiple labels may carry the SAME net name on DISJOINT wire
+        # islands (stub-based connectivity) — accumulate, never overwrite.
         net_coverage = {}  # net_name -> set of positions
         for pos, net_name in label_positions.items():
             if net_name:  # Skip empty labels
                 positions, wires = propagate_net_label(pos)
-                net_coverage[net_name] = positions
+                net_coverage.setdefault(net_name, set()).update(positions)
         
         # Also check junctions - they may connect wires from different nets
         for junc_pos in junction_positions:
