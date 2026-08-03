@@ -17,12 +17,13 @@ This directory is the tracked entry point for testing. The actual test workspace
 
 ## Current Status Baseline
 
-As of 2026-07-23, the important implemented surface is:
+As of 2026-08-04, the important implemented surface is:
 
-- KiCad 10 → JSON parsing works.
-- JSON → KiCad delta apply works for value changes, removals, and additions.
-- Component additions use net labels and staging placement.
-- Series insertion and missing-label situations generate warnings and require user wiring.
+- KiCad 10 → JSON parsing works, including nets formed by multiple disjoint stub islands sharing a label.
+- JSON → KiCad delta apply works for value changes, removals, additions, and net restructuring.
+- Component additions use staging placement with per-pin stubs; missing library symbols are auto-embedded from installed KiCad libraries.
+- Series insertion / net splits are applied programmatically (clear-and-stub); no manual wiring is required for connectivity.
+- Residual warnings exist only for missing libraries and power-net anchor violations.
 - Sync panel detects KiCad/JSON drift.
 - LLM integration and simulation are not yet the source of truth for tests; test them as planned/future unless explicitly wired.
 

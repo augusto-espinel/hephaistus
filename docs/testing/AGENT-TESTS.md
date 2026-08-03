@@ -1,6 +1,6 @@
 # HephAIstus Agent Test Spec
 
-*For agent-run or user-triggered automated checks. Consolidated 2026-07-23.*
+*For agent-run or user-triggered automated checks. Consolidated 2026-07-23. Updated 2026-08-04 for the stub-based apply flow.*
 
 These tests are designed to be runnable by an agent after code changes, or by Augusto from a terminal. They must be safe by default: use temp directories, skip missing local fixtures, and never mutate `tests/user/` unless explicitly requested.
 
@@ -27,9 +27,11 @@ Subcommands:
 ```bash
 bash scripts/test/agent.sh parse       # parser smoke test
 bash scripts/test/agent.sh roundtrip   # value round-trip in temp dir
-bash scripts/test/agent.sh warnings    # series/missing-label warning checks
 bash scripts/test/agent.sh build       # TypeScript build
-bash scripts/test/agent.sh all         # build + parse + roundtrip + warnings
+bash scripts/test/agent.sh all         # build + parse + roundtrip
+
+# Stub-based apply E2E (replaces the old warnings subcommand):
+.venv/bin/python3 tests/agent/stub_apply_e2e.py
 ```
 
 Environment:
@@ -95,23 +97,29 @@ bash scripts/test/agent.sh roundtrip
 
 ---
 
-### AT-04 — Addition warnings in temp directory
+### AT-04 — Stub-based apply E2E
 
 **Command**
 ```bash
-bash scripts/test/agent.sh warnings
+.venv/bin/python3 tests/agent/stub_apply_e2e.py
 ```
 
-**Expected**
-- Adds a series component using one existing net on both pins; expects `series_insertion`.
-- Adds a component connected to an existing unlabeled net; expects `missing_labels` when such a net is available.
-- Runs only in a temp directory.
+**Expected** (26 checks across 6 scenarios, all in temp directories)
 
-**Pass condition**
-- Delta output contains warning types `series_insertion` and, when the fixture has an unlabeled net such as `N$1`, `missing_labels`.
+| Scenario | What it proves |
+|----------|----------------|
+| S0 no-op | Unchanged JSON applies cleanly, nets untouched |
+| S1 series insertion | R3 (1mΩ shunt) between C1 and R2: `dc_plus` island cleared, pins split across `dc_plus` / `dc_plus_shunt` by re-parse |
+| S2 chained insertion | A second split applied *on the result of S1* produces the correct three-way net structure |
+| S3 parallel add | C3 across `dc_plus`/`dc_minus`: nets gain C3's pins, exactly 2 stub wires added, no existing geometry touched |
+| S4 RL series + lib embed | `Device:L` auto-embedded from installed KiCad libraries; RL chain `dc_plus → filt_mid → filt_out` correct |
+| S5 integrity regression | Duplicate-UUID JSON still aborts with exit code 3 |
 
-**Known limitation**
-- This checks warning generation, not the future persistent advice ledger.
+**External validation**
+- `kicad-cli sch erc` on a stub-applied schematic reports zero new violations vs. the untouched fixture (the fixture itself has 2 pre-existing issues).
+
+**History**
+- Replaced the old `series_insertion` / `missing_labels` warning checks on 2026-08-04 — those warning types were removed when the stub architecture made them unnecessary.
 
 ---
 
@@ -165,7 +173,7 @@ Command: npm run test:agent
 | AT-01 Build | | npm run build |
 | AT-02 Parse | | components/nets count |
 | AT-03 Roundtrip | | C1/R2 verified values |
-| AT-04 Warnings | | warning types seen |
+| AT-04 Stub apply E2E | | 26 checks, scenarios S0–S5 |
 | AT-05 Docs consistency | | grep hits |
 
 Artifacts:

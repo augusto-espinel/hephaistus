@@ -17,11 +17,12 @@ The system operates across three pillars:
 
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
-| KiCad → JSON Parsing | ✅ Complete | Full component/net extraction |
-| JSON → KiCad Delta Apply | ✅ Complete | Value changes, component removal, component addition |
+| KiCad → JSON Parsing | ✅ Complete | Full component/net extraction, multi-island stub nets |
+| JSON → KiCad Delta Apply | ✅ Complete | Values, removals, additions, stub-based net restructuring |
 | VS Code Extension | ✅ Complete | File watchers, sync panel |
 | Round-Trip Integration | ✅ Complete | Both directions working |
-| Warning System | ✅ Complete | Series insertion, missing labels detection |
+| Stub-Based Restructuring | ✅ Complete | Clear-and-stub series insertion / net splits (2026-08-04) |
+| Library Embedding | ✅ Complete | Auto-embeds missing lib symbols from installed KiCad libraries |
 | LLM Integration | 📝 Planned | SKiDL code generation |
 | SPICE Simulation | 📋 Planned | ngspice execution |
 
@@ -508,8 +509,9 @@ hephaistus/
 
 ## Next Steps
 
-1. **Wire UI Patch Lifecycle**: Connect `approvePatch`/`rejectPatch` commands to `patchApplyService`
-2. **Implement Session Initialization**: Flesh out `startSession` command logic
-3. **Complete Webview UI**: Implement `llmWebView.ts` streaming and interaction
-4. **Add Simulation Runner**: Create `SimulationRunner` service for headless SPICE execution
-5. **Expand Test Coverage**: Add integration tests for full sync cycle
+1. **Validate stub apply in KiCad GUI**: Open stub-applied schematics in KiCad, confirm ergonomics of staged components and stub nets (E2E suite + `kicad-cli` ERC already pass headlessly)
+2. **Wire UI Patch Lifecycle**: Connect `approvePatch`/`rejectPatch` commands to `patchApplyService`
+3. **Implement Session Initialization**: Flesh out `startSession` command logic
+4. **Complete Webview UI**: Implement `llmWebView.ts` streaming and interaction
+5. **Add Simulation Runner**: Create `SimulationRunner` service for headless SPICE execution — stub-applied schematics are simulatable immediately, so simulation can gate on net correctness rather than manual wiring
+6. **Advice Ledger (optional cleanup)**: Track *aesthetic* re-wiring suggestions (redraw cleared nets) as verifiable advice — logical connectivity no longer needs it

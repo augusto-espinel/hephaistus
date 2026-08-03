@@ -1,17 +1,18 @@
 # HephAIstus: Use Cases Blueprint for LLM-Assisted Circuit Design
 
 *Expanded 2026-07-23 — Grounding document for the next development phases.*
+*Updated 2026-08-04 — Stub-based apply shipped: the wiring constraint below is lifted for logical connectivity; advice now covers aesthetics, placement, and genuinely external steps.*
 
 This document expands the persona-based use cases for HephAIstus. It is intentionally detailed because the next implementation phase is not just "wire the LLM to JSON"; it is **designing a safe collaboration protocol** between:
 
 - the **human**, who owns KiCad geometry and physical wiring decisions;
 - the **extension**, which synchronizes `.kicad_sch` ↔ JSON and guards destructive operations;
-- the **LLM**, which proposes values, topology changes, simulation experiments, and manual wiring guidance;
+- the **LLM**, which proposes values, topology changes, simulation experiments, and optional cleanup guidance;
 - the **simulator**, which will eventually provide objective feedback through SKiDL/ngspice.
 
-The current technical constraint that shapes every use case is:
+The technical constraint that shaped this document was lifted on 2026-08-04:
 
-> HephAIstus can already parse KiCad → JSON and apply useful JSON → KiCad deltas, but it cannot yet arbitrarily manipulate wires like a human routing on canvas. Therefore, the LLM must treat many topology changes as a combination of **machine-applied edits** plus **explicit human wiring advice**, then **remember that advice** and verify on the next parse whether the user completed it correctly.
+> HephAIstus applies topology changes programmatically via **clear-and-stub net restructuring**: nets that lose member pins have their wire island stripped and replaced by labeled stubs carrying the new net names. The schematic is electrically complete and simulatable immediately after apply. What remains human work is *aesthetic* — redrawing wires, repositioning staged components — plus genuinely external steps like importing missing symbol libraries. Advice and verification still matter, but for cleanup and confirmation, not for basic connectivity.
 
 ---
 
@@ -21,33 +22,33 @@ The current technical constraint that shapes every use case is:
 
 From the current implementation and architecture docs, HephAIstus already supports:
 
-- KiCad 10 parsing into JSON state with components, pins, nets, wires, and junctions.
+- KiCad 10 parsing into JSON state with components, pins, nets, wires, and junctions (including nets built from multiple disjoint stub islands sharing a label name).
 - JSON → KiCad delta application for:
   - value changes;
   - component removal;
-  - component addition using net labels and staging placement;
-  - warning generation for cases that require manual user action.
+  - component addition with staging placement, per-pin stubs, and automatic library-symbol embedding from installed KiCad libraries;
+  - **net restructuring**: series insertion, net splits, and net renames via pin net re-assignments, applied as clear-and-stub (old island stripped, new labeled stubs on every affected pin).
 - Sync state detection and a manual sync panel.
-- Preservation of existing geometry when applying supported deltas.
+- Preservation of existing geometry for all nets the change does not touch.
 
 ### 1.2 What the system should not pretend it can do yet
 
-The system should not claim that it can fully reroute a schematic autonomously.
+The system should not claim that it can produce beautiful routing autonomously.
 
 Current practical limits:
 
-- Arbitrary wire creation, deletion, rerouting, and cleanup are not reliably programmatic.
-- Series insertion into an existing wire often requires the user to break a wire and place labels.
-- New components can be placed at a staging location with labels, but final placement and routing belong to the user.
-- Some "obvious" electrical changes are geometrically ambiguous on canvas and must be expressed as advice, not silent edits.
+- Aesthetic wire routing, cleanup, and component placement are not programmatic — stubs guarantee connectivity, not elegance.
+- Restructured nets lose their drawn wires (clear-and-stub); the user redraws them when convenient.
+- Symbols using `(extends ...)` inheritance cannot be auto-embedded yet; genuinely missing libraries require a KiCad-side import, then re-apply.
+- Power-symbol-anchored nets cannot be restructured (rejected with a warning).
 
 ### 1.3 Design consequence
 
-Every non-trivial LLM optimization must produce **three coordinated outputs**:
+Every non-trivial LLM optimization must still produce **three coordinated outputs**, but their content has shifted:
 
-1. **Patch** — machine-appliable changes to JSON/KiCad/Python simulation inputs.
-2. **Advice** — human-readable instructions and checklist items for manual schematic work.
-3. **Verification plan** — concrete assertions the extension can check after the next KiCad parse.
+1. **Patch** — machine-appliable changes to JSON/KiCad/Python simulation inputs. This now includes topology changes (pin net re-assignments), which the apply pass turns into stubs.
+2. **Advice** — optional human cleanup (redraw cleared nets, reposition staged parts) and genuinely external steps (import a library, check a datasheet).
+3. **Verification plan** — concrete assertions the extension can check after the next KiCad parse, including whether cleanup advice was completed.
 
 If one of these outputs is missing, the workflow is incomplete.
 
@@ -278,8 +279,8 @@ I found two issues: missing input bulk capacitance and an undersized feedback di
 | Value changes only | `values` | Preview diff, apply after approval |
 | Add component at staging | `add` | Apply, generate placement/wiring advice |
 | Remove component | `delete` | Require explicit confirmation |
-| Topology correction / stub / net relabel | `restructure` | Prefer advice-first; only apply labels/stubs where safe |
-| Any wiring instruction | any | Never silently apply; track as manual action |
+| Topology correction / net relabel / series insertion | `restructure` | Machine-applied via clear-and-stub; generate cleanup advice for redrawing |
+| Aesthetic wiring, placement, routing cleanup | any | Never silently apply; track as optional advice |
 
 ---
 
@@ -691,18 +692,17 @@ To make these use cases real, the next phases should build the following in orde
    - simulation-metric checks later;
    - compact verification reports back to the LLM.
 
-4. **Warning generalization**
-   - series insertion and missing labels become typed advice with verification;
-   - generated KiCad annotations should reference advice IDs where practical.
+4. **Warning generalization** ✅ *Superseded 2026-08-04*
+   - Series insertion and missing-label situations no longer produce warnings — they are applied as stubs. The advice-ledger work (items 1–3) now targets optional cleanup and external steps only.
 
 5. **Simulation integration**
-   - SKiDL generation from verified JSON only;
-   - refuse or degrade simulation when required manual actions are pending;
+   - SKiDL generation from verified JSON only — stub-applied schematics qualify, since stubs are real labeled connectivity;
    - feed metrics into iterative optimization.
 
 6. **Tests grounded in these use cases**
-   - hobbyist: value change + decoupling advice verification;
-   - student: bootstrap cap wiring remembered across parse cycles;
+   - ✅ stub apply E2E (`tests/agent/stub_apply_e2e.py`): series insertion, chained splits, parallel add, library embedding, integrity abort;
+   - hobbyist: value change + decoupling cleanup verification;
+   - student: stub-applied topology verified across parse cycles;
    - senior: legacy property preservation and label-based high-speed verification.
 
 ---

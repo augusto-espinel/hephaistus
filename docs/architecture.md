@@ -1,4 +1,6 @@
-# HephAIstus Architecture Blueprint (v2.0)
+# HephAIstus Architecture Blueprint (v2.1)
+
+*Updated 2026-08-04 — stub-based apply flow (§4.2, §9): warnings replaced by programmatic clear-and-stub net restructuring.*
 
 This document is the **authoritative reference** for HephAIstus architecture, parsing subsystem, and round-trip workflow.
 
@@ -80,6 +82,7 @@ The architecture has four domains: **Extension Host** (TypeScript), **Python Bri
 | Property Extraction | ✅ Complete | Reference, value, SPICE params |
 | Net Mapping | ✅ Complete | Pin-to-net through wires/junctions |
 | Wire Tracking | ✅ Complete | UUIDs for round-trip |
+| Stub Net Coverage | ✅ Complete | Same-name labels across disjoint stub islands accumulate (2026-08-04) |
 | Unnamed Nets | ✅ Complete | N$1, N$2, ... auto-naming |
 
 ### 3.2 Parser Script
@@ -156,90 +159,68 @@ sim_params = props.get('Sim.Params', '')    # "dc=0 ampl=10 f=50 ac=0"
 |-----------|--------|-------------|
 | Value changes | ✅ Complete | Modifies `Value` property, preserves geometry |
 | Component removal | ✅ Complete | Removes symbol, preserves connected wires/junctions |
-| Component addition | ✅ Complete | Adds symbol with net labels, warning system |
-| Connection changes | 📋 Planned | Creates stub markers |
+| Component addition | ✅ Complete | Staging placement + stub connections; library auto-embedding |
+| Net restructuring | ✅ Complete | Clear-and-stub: net splits / series insertion via pin net re-assignments (2026-08-04) |
 
-### 4.2 Component Addition with Net Labels
+### 4.2 Stub-Based Component Addition and Net Restructuring
 
-When adding components, the system uses **net labels** instead of wire routing:
+Since 2026-08-04, all new connectivity is applied programmatically as
+**stubs**: a short wire (5.08 mm) plus a net label placed directly on the
+affected pin. Connectivity is carried by label names alone, so the schematic
+is electrically complete — and simulatable — immediately after apply. The
+user may redraw physical wires later for aesthetics, but no manual step is
+required for correctness.
 
-1. **Parse existing nets** — Extract net names from JSON state and schematic labels
-2. **Generate net labels** — Create `(label "net_name" ...)` for each pin connection
-3. **Place at staging position** — New components offset from existing components
-4. **Detect manual action requirements** — Check for series insertion or missing labels
+**Component addition** (`apply_component_addition_text`):
+1. Resolve and, if missing, **embed the library symbol** into `lib_symbols`
+   from the user's installed KiCad libraries (sym-lib-table resolution).
+2. Place the symbol at the staging position with an `(instances ...)` block
+   and `(pin N (uuid ...))` blocks (KiCad 6+ instance format — required for
+   the parser to see the pins).
+3. Place a stub carrying the assigned net name on every connected pin.
 
-**Why net labels?**
-- No geometry calculations needed
-- User completes wiring in KiCad (their domain)
-- Works for both parallel and series insertions (with warnings)
+**Net restructuring** (`apply_net_restructure`) — runs between removals and
+additions. When the modified JSON moves pins off a net (series insertion,
+net split, net rename):
+1. Build the affected net's wire island via kiutils topology
+   (wires + junctions BFS from every member pin).
+2. Strip ALL wires, junctions, and labels of that island.
+3. Place a stub on every former member pin carrying its NEW net name.
+4. Pins that gain a net from an unconnected state also receive stubs
+   (without clearing anything).
 
-### 4.3 Warning System
+Stub direction follows the removed wire's direction at that pin, falling
+back to the library pin angle. Power symbols anchor their nets — attempting
+to move a pin off a power-anchored net is rejected with a warning.
 
-#### Warning Types
+**Why clear-and-stub instead of surgical wire edits?**
+- The AI contract is purely logical: topology changes are expressed as pin
+  net re-assignments in JSON; geometry is derived, never specified.
+- Surgical wire breaking is geometrically ambiguous (which segment? where?);
+  clearing the island and re-stubbing is deterministic and always valid.
+- Aesthetics are sacrificed temporarily (the affected net loses its drawn
+  wires) — acceptable, because the user only redraws nets that changed.
+
+### 4.3 Residual Warnings
+
+Warnings now exist only for "could not complete" cases:
 
 | Type | Condition | User Action |
 |------|-----------|-------------|
-| `series_insertion` | All pins to same existing net | Break wire, connect labels |
-| `missing_labels` | Pins to nets without labels | Add labels to existing wires |
+| `missing_library` | libId not found in any installed KiCad library | Import the library in KiCad, then re-apply |
+| `power_net_anchor` | AI tried to move pins off a power-symbol-anchored net | Re-express the change without moving the anchored net |
 
-#### Detection Functions
-
-```python
-def detect_series_insertion(connections, existing_nets):
-    """Check if all pins connect to same existing net."""
-    unique_nets = set(connections.values())
-    if len(unique_nets) == 1 and unique_nets.pop() in existing_nets:
-        return True, net_name
-    return False, None
-
-def detect_missing_labels(connections, existing_nets, nets_with_labels):
-    """Check if component connects to nets without labels."""
-    missing = []
-    for net in set(connections.values()):
-        if net in existing_nets and net not in nets_with_labels:
-            missing.append(net)
-    return len(missing) > 0, missing
-```
-
-#### Schematic Annotations
-
-Both warning types add text annotations in KiCad:
-
-```
-(series insertion)
-⚠ R3 requires series insertion.
-Break wire on net 'dc_plus' and connect labels.
-
-(missing labels)
-⚠ R4 requires labels on existing nets.
-Add net labels 'net_a', 'net_b' to existing wires.
-```
+Successful applies emit **zero** warnings. The legacy `series_insertion`,
+`missing_labels`, and `wiring_advice` warnings were removed on 2026-08-04 —
+the situations they described are now applied automatically.
 
 #### VS Code UI Guard
 
-**Problem:** User could parse KiCad → JSON after applying delta, erasing LLM suggestions before completing manual actions.
-
-**Solution:**
+The `pendingWarnings` guard remains, but now triggers only on residual
+warnings:
 1. Save `pendingWarnings[]` to `state.json` after Apply JSON → KiCad
 2. Check `pendingWarnings` before Parse KiCad → JSON
-3. Show modal: "You have unfinished manual actions... Parsing will erase LLM suggestions"
-
-**User Flow:**
-```
-Apply JSON → KiCad
-      │
-      ├─ Warnings generated?
-      │   └─ Modal: "Manual action required"
-      │       └─ "Open Schematic" / "Dismiss"
-      │
-      └─ Warnings saved to state.json
-
-User tries Parse KiCad → JSON
-      │
-      └─ Check pendingWarnings
-          ├─ Has warnings? → Modal: "Continue?"
-          └─ Clear if user confirms
-```
+3. Show modal: "You have unfinished manual actions..."
 
 ### 4.4 Delta Application Script
 
@@ -302,21 +283,15 @@ insertions land mid-block (observed: a label uuid sliced in half → KiCad
 
 **IMPORTANT:** Uses **text-based editing** to preserve all KiCad 10 properties.
 
-#### Per-pin wiring advice (added 2026-08-01)
+#### Stub architecture supersedes wiring advice (2026-08-04)
 
-Every staged component now emits a structured `wiring` recipe in the warning
-payload (`build_wiring_advice()`), rendered in the extension's post-apply
-modal and persisted in `pendingWarnings`:
-
-- `series_insertion` warnings carry per-pin steps: first pin `connect_label`
-  to the existing net; remaining pins `break_wire_new_net` with a suggested
-  new net name (`Net-(<Ref>-Pad<n>)`);
-- `missing_labels` warnings carry `add_label_to_existing_net` steps;
-- components with no series/label problem emit a `wiring_advice` warning
-  (previously they staged silently) with `connect_label` / `new_net` steps.
-
-This is the first increment toward the advice ledger (`use_cases_blueprint.md`
-§2.4): advice is produced and persisted; verification on re-parse is Sprint B.
+The per-pin `wiring` recipes added 2026-08-01 (`build_wiring_advice()`,
+`series_insertion` / `missing_labels` / `wiring_advice` warnings, schematic
+text annotations) were removed on 2026-08-04. The apply pass now performs
+the wiring itself via clear-and-stub (see §4.2); warnings persist only for
+genuine failure states (see §4.3). The verification-first ideas survive in
+the advice-ledger design (`use_cases_blueprint.md` §2), which remains the
+target for optional *aesthetic* re-wiring suggestions.
 
 The script reads the `.kicad_sch` file as text, finds the symbol by UUID,
 locates the `Value` property S-expression, and replaces only the value string.
@@ -369,36 +344,56 @@ Text-based editing avoids this by only modifying the exact value that changed.
     "reference": "C2",
     "libId": "Device:C",
     "value": "100n",
-    "connections": {
-      "1": "dc_plus",
-      "2": "dc_minus"
-    }
+    "pins": [
+      {"number": "1", "uuid": "...", "net": "dc_plus"},
+      {"number": "2", "uuid": "...", "net": "dc_minus"}
+    ]
   }]
 }
 ```
 
-**Warning Output:**
+**Net Restructuring (series insertion of R3 between C1 and R2):**
+```json
+{
+  "connection_changes": [
+    {"reference": "R2", "pin": "2", "old_net": "dc_plus", "new_net": "dc_plus_shunt"}
+  ],
+  "added_components": [{
+    "reference": "R3", "libId": "Device:R", "value": "0.001",
+    "pins": [
+      {"number": "1", "net": "dc_plus"},
+      {"number": "2", "net": "dc_plus_shunt"}
+    ]
+  }]
+}
+```
+Result: the `dc_plus` island is cleared; every former member pin gets a stub
+with its new net name; R3 is staged with stubs on both potentials.
+
+**Warning Output (residual only):**
 ```json
 {
   "warnings": [{
-    "type": "series_insertion",
-    "component": "R3",
-    "net": "dc_plus",
-    "message": "⚠ R3 requires series insertion...",
-    "action_required": "break_wire"
+    "type": "missing_library",
+    "component": "U7",
+    "libId": "MyVendor:ADC128S052",
+    "message": "Library symbol not installed; import it in KiCad, then re-apply"
   }]
 }
 ```
 
-### 4.4 Geometry Preservation
+### 4.6 Geometry Preservation
 
 The delta application preserves:
-- **Wire paths** — Existing geometry unchanged
-- **Junction positions** — Connection points preserved
+- **Wire paths of untouched nets** — Existing geometry unchanged
+- **Junction positions** — Connection points preserved (except on cleared nets)
 - **Component positions** — Only new components need placement
-- **Labels** — Net labels preserved
+- **Labels of untouched nets** — Net labels preserved
 
-### 4.5 Backup Strategy
+Nets that the AI restructures are the deliberate exception: their wire island
+is cleared and replaced by stubs (§4.2).
+
+### 4.7 Backup Strategy
 
 Before applying changes:
 1. Automatic backup: `.kicad_sch.bak`
@@ -540,41 +535,42 @@ Before structural changes, LLM must express:
 
 ### 9.1 The Problem
 
-LLM cannot determine where to place new components spatially. The user controls layout.
+The LLM reasons about topology, not geometry. It cannot know where a new
+component belongs on canvas, and surgical wire edits (which segment to cut,
+where to route) are geometrically ambiguous.
 
-### 9.2 The Solution
+### 9.2 The Solution (implemented 2026-08-04)
 
-Stub connections are **logical-only** connections:
+Stubs are **physical but minimal**: a 5.08 mm wire plus a net label placed on
+the affected pin. Label names carry connectivity, so the schematic is valid,
+ERC-clean, and simulatable the moment the apply finishes.
 
-```json
-{
-  "stubs": [
-    {
-      "from": "C1.1",
-      "to": "GND",
-      "type": "logical",
-      "status": "pending_placement"
-    }
-  ]
-}
-```
+Two stub paths exist:
 
-### 9.3 UI Representation
+- **Addition stubs** — every connected pin of a newly staged component gets
+  a stub with its assigned net.
+- **Restructuring stubs** — when pins move off a net, the net's old wire
+  island is cleared and every former member pin gets a stub carrying its new
+  net name (§4.2).
 
-- Stubs appear as dashed lines in KiCad
-- User completes physical wiring
-- Stubs resolved → removed from state
+### 9.3 User Experience
+
+- The circuit works immediately after apply (ERC-clean, simulatable).
+- Changed nets look "stubbed" until the user redraws wires — a visible,
+  honest signal of exactly what the AI touched.
+- Untouched nets keep their original geometry.
 
 ### 9.4 Placement Algorithm
 
 ```
-1. LLM proposes component (C1: 100nF)
+1. LLM proposes component (C1: 100nF) with pin→net assignments in JSON
 2. Extension computes staging origin:
    - Bounding box of existing components
    - Offset (dx=25mm, dy=25mm) to lower-right
-3. Symbol placed at staging coordinates
-4. Stub connections created
-5. User repositions, wires, resolves stubs
+3. Library symbol embedded if missing; symbol placed at staging coordinates
+4. Stub direction = removed wire direction at that pin,
+   else library pin angle
+5. User repositions and redraws wires when convenient (optional)
 ```
 
 ---
@@ -620,8 +616,8 @@ Stub connections are **logical-only** connections:
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Component addition | 📝 Planned | Requires library symbol lookup |
-| Connection stubs | 📝 Planned | Logical-only connections |
+| Component addition | ✅ Complete | Staging + stubs + library auto-embedding (2026-08-04) |
+| Net restructuring | ✅ Complete | Clear-and-stub for splits / series insertion (2026-08-04) |
 | LLM integration | 📝 Planned | SKiDL code generation |
 | Multi-sheet support | 📋 Planned | Hierarchical schematics |
 | SKiDL/ngspice runner | 📋 Planned | Simulation execution |

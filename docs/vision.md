@@ -2,6 +2,7 @@
 
 *Captured 2026-07-15 — Reference for future development*
 *Updated 2026-07-23 — Detailed persona workflows now live in [use_cases_blueprint.md](./use_cases_blueprint.md).*
+*Updated 2026-08-04 — Stub-based apply implemented: connectivity is now machine-applied; advice remains for aesthetics and placement.*
 
 ---
 
@@ -17,7 +18,7 @@ Today, these two worlds interact through a painful manual cycle: design in KiCad
 
 ## Primary Use Cases
 
-The use cases below are the short version. The expanded blueprint adds the critical operating rule for the next phase: because HephAIstus cannot yet manipulate all KiCad wiring programmatically, every LLM optimization must separate **machine-appliable patches** from **human wiring advice**, then remember that advice and verify it after the next parse.
+The use cases below are the short version. The expanded blueprint adds the operating protocol for the collaboration. As of 2026-08-04 the central constraint has been lifted: topology changes **are** applied programmatically via clear-and-stub net restructuring — the schematic is electrically complete and simulatable immediately after apply. What still separates machine edits from human work is *aesthetics and placement*: the user redraws wires and positions components, and the blueprint's advice/verification model tracks that optional cleanup.
 
 ### 1. LLM-Guided Component Selection and Tuning
 
@@ -54,7 +55,7 @@ Beyond value changes, the LLM can propose structural modifications:
 - **Delete components:** Redundant parallel resistors, unnecessary bypass paths
 - **Re-wire connections:** Wrong net assignments, topology corrections
 
-Re-wiring uses **stub connections and tracked advice** — logical connections that make the circuit simulatable while preserving user spatial control. The user sees the stub or checklist item in KiCad/VS Code, completes the physical wiring, and HephAIstus verifies on the next parse that the expected labels, component pins, and net connections actually appeared.
+Re-wiring uses **stub connections**: the apply pass clears the affected net's wire island and places labeled stubs on every affected pin, making the circuit simulatable immediately while preserving user spatial control. The user may redraw the physical wires whenever convenient; the planned advice ledger will track and verify such optional cleanup suggestions.
 
 ---
 
@@ -121,22 +122,21 @@ Before any structural change (add/delete/stub), the LLM must express intent:
 
 ### Stub Connections for Re-wiring
 
-When the LLM needs to change a net connection, it creates "stubs" — logical connections that make the circuit simulatable while preserving user spatial control.
+When the LLM needs to change a net connection, the apply pass creates "stubs" — a short wire plus a net label on each affected pin — that make the circuit simulatable while preserving user spatial control.
 
-**How it works:**
+**How it works (implemented 2026-08-04):**
 
-1. LLM identifies needed connection
-2. Creates stub in JSON state (logical connection for simulation)
-3. Marks it in KiCad (visual indicator)
-4. Simulation proceeds with correct topology
-5. User completes wiring in KiCad
-6. Stub promotes to real connection on next sync
+1. LLM expresses the change as pin net re-assignments in JSON state
+2. Apply clears the old net's wire island (for splits) and places stubs with the new net names
+3. Simulation can proceed immediately with correct topology
+4. User redraws physical wires in KiCad when convenient (optional)
+5. Next parse confirms the topology; stubs that were rewired simply parse as ordinary nets
 
 **Benefits:**
 
 - Circuit becomes simulatable immediately
 - User retains spatial control over wire routing
-- Clear action items for manual completion
+- Changed nets are visually obvious (stubbed) until redrawn
 - Reversible via backup system
 
 ---

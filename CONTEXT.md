@@ -42,7 +42,7 @@ Check the most recent memory files for the latest work, decisions, and context.
 | **Three Pillars** | Schematic (.kicad_sch) ↔ JSON State (state.json) ↔ Python/SKiDL (simulation) |
 | **Iteration Budget** | LLM can iterate N times autonomously before checkpoint |
 | **Permission Levels** | `values` → `add` → `delete` → `restructure` (progressive trust) |
-| **Stub Connections** | Logical connections for simulation, user draws physical wires later |
+| **Stub Connections** | Connectivity applied as wire+label stubs; nets split/join via clear-and-stub restructuring |
 | **Tiered Models** | Local cheap models for sync, frontier models for optimization |
 
 ## Project Structure
@@ -65,14 +65,14 @@ hephaistus/
 └── tests/                  # Test suites
 ```
 
-## Current Status (2026-07-21)
+## Current Status (2026-08-04)
 
 ### Working ✅
 
 - Extension activation
 - File watcher detection
 - Python/KiUtils path resolution
-- KiCad 10 parsing
+- KiCad 10 parsing (including multi-island stub nets sharing a label)
 - JSON state generation
 - State file tracking
 - TypeScript compilation (0 errors)
@@ -86,16 +86,23 @@ hephaistus/
 - **Recommended action highlighting**
 - **Confirmation dialogs** for destructive operations
 - **Restore from JSON** - Discard KiCad changes option
+- **Stub-based apply flow** (2026-08-04):
+  - Component additions: staging placement + per-pin stubs, KiCad 6+ instance format
+  - Net restructuring: series insertion / net splits applied via clear-and-stub
+  - Library auto-embedding: missing lib symbols pulled from installed KiCad libraries
+  - Residual warnings only (missing library, power-net anchor)
+- **Agent E2E suite**: `tests/agent/stub_apply_e2e.py` — 26 checks, 6 scenarios; `kicad-cli` ERC clean
 
 ### Known Limitations
 
-- Component `reference`, `value`, `footprint` fields are empty (kiutils stores these in `symbolInstances`/properties, not `schematicSymbols`)
+- Symbols using `(extends ...)` inheritance can't be auto-embedded yet
+- Restructured nets lose drawn wires (stubs guarantee connectivity, not aesthetics) — user redraws when convenient
 - LLM integration not yet wired
 - Simulation module (SKiDL/ngspice) not implemented
 
 ### Last Milestone
 
-**Manual Sync Workflow Complete (2026-07-21)**: Full bidirectional sync workflow with status detection, recommended action highlighting, and safety confirmation dialogs.
+**Stub-Based Net Restructuring (2026-08-04)**: The apply flow was rebuilt around stubs (wire + net label) instead of physical wire-breaking advice. Series insertion and net splits are expressed purely as pin net re-assignments in JSON and applied deterministically. Commit `30414da`.
 
 ## Development Commands
 
@@ -134,16 +141,16 @@ The codebase is versioned and pushed to GitHub. Contributors can clone and follo
 
 ## Next Steps (Priority Order)
 
-1. **Enhance component extraction** — Pull reference/value/footprint from `symbolInstances` (currently only in `properties`)
-2. **Wire LLM integration** — Connect optimization model to ingestion
-3. **Use consolidated test specs** — User: `docs/testing/USER-TESTS.md`; Agent: `docs/testing/AGENT-TESTS.md` (`npm run test:agent`)
-4. **Test full workflow** — End-to-end with simulation
-5. **Document sync workflow** — Add user guide for manual sync process
+1. **Validate stub apply in KiCad GUI** — Augusto to open stub-applied schematics (E2E S1/S4 scenarios) and judge ergonomics
+2. **Wire LLM integration** — Connect optimization model to ingestion; the AI contract is now purely logical (pin net re-assignments)
+3. **Use consolidated test specs** — User: `docs/testing/USER-TESTS.md`; Agent: `docs/testing/AGENT-TESTS.md` (`npm run test:agent`, stub E2E via `.venv/bin/python3 tests/agent/stub_apply_e2e.py`)
+4. **Test full workflow** — End-to-end with simulation (stub-applied schematics are simulatable immediately)
+5. **Advice ledger (optional cleanup)** — Track aesthetic re-wiring suggestions as verifiable advice (`docs/use_cases_blueprint.md` §2)
 
 ## Notes for AI
 
 - The project targets hobbyists, students, and professionals — keep this audience range in mind
-- The "stubs" pattern for re-wiring is key: logical connections for simulation, user retains spatial control
+- The "stubs" pattern is now the applied mechanism, not just a pattern: all new connectivity is wire+label stubs; restructured nets are cleared and re-stubbed. Users redraw wires only for aesthetics
 - The project is KiCad-first but architecturally CAD-agnostic (PLECS, GeckoCircuits future targets)
 - Always check memory logs for the latest decisions and context before making changes
 - **GitHub repo exists** — commit significant changes, keep .gitignore updated
