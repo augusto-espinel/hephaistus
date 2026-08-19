@@ -14,7 +14,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from hephaistus_circuit import PatchPlanError, apply_patch_plan, mutate_state, parse_schematic  # noqa: E402
+from hephaistus_circuit import (
+    PatchPlanError,
+    apply_patch_plan,
+    mutate_state,
+    parse_schematic,
+    validate_patch_plan,
+)  # noqa: E402
 
 FIXTURE = ROOT / "fixtures" / "schematics" / "rectifier.kicad_sch"
 KICAD_CLI_CANDIDATES = [
@@ -33,14 +39,18 @@ def net_map(state):
 
 def insert_shunt_plan():
     return {
+        "schema": "hephaistus/patch-plan/v1",
+        "intent": "Insert current shunt",
         "operations": [
-            {"op": "set_pin_net", "reference": "R2", "pin": "2", "net": "dc_plus_shunt"},
+            {"type": "net.split", "origin_net": "dc_plus", "move_pins": ["R2.2"], "new_net": "dc_plus_shunt"},
             {
-                "op": "add_component",
-                "reference": "R3",
-                "lib_id": "Device:R",
-                "value": "0.001",
-                "pins": {"1": "dc_plus", "2": "dc_plus_shunt"},
+                "type": "component.add",
+                "component": {
+                    "reference": "R3",
+                    "lib_id": "Device:R",
+                    "value": "0.001",
+                    "pins": {"1": "dc_plus", "2": "dc_plus_shunt"},
+                },
             },
         ]
     }
@@ -48,14 +58,17 @@ def insert_shunt_plan():
 
 def chain_second_split_plan():
     return {
+        "schema": "hephaistus/patch-plan/v1",
         "operations": [
-            {"op": "set_pin_net", "reference": "C2", "pin": "2", "net": "dc_plus_b"},
+            {"type": "net.split", "origin_net": "dc_plus", "move_pins": ["C2.2"], "new_net": "dc_plus_b"},
             {
-                "op": "add_component",
-                "reference": "R4",
-                "lib_id": "Device:R",
-                "value": "0.001",
-                "pins": {"1": "dc_plus", "2": "dc_plus_b"},
+                "type": "component.add",
+                "component": {
+                    "reference": "R4",
+                    "lib_id": "Device:R",
+                    "value": "0.001",
+                    "pins": {"1": "dc_plus", "2": "dc_plus_b"},
+                },
             },
         ]
     }
@@ -63,13 +76,16 @@ def chain_second_split_plan():
 
 def parallel_capacitor_plan():
     return {
+        "schema": "hephaistus/patch-plan/v1",
         "operations": [
             {
-                "op": "add_component",
-                "reference": "C3",
-                "lib_id": "Device:C",
-                "value": "100u",
-                "pins": {"1": "dc_plus", "2": "dc_minus"},
+                "type": "component.add",
+                "component": {
+                    "reference": "C3",
+                    "lib_id": "Device:C",
+                    "value": "100u",
+                    "pins": {"1": "dc_plus", "2": "dc_minus"},
+                },
             },
         ]
     }
@@ -77,21 +93,26 @@ def parallel_capacitor_plan():
 
 def rl_chain_plan():
     return {
+        "schema": "hephaistus/patch-plan/v1",
         "operations": [
-            {"op": "set_pin_net", "reference": "C1", "pin": "2", "net": "filt_out"},
+            {"type": "net.split", "origin_net": "dc_plus", "move_pins": ["C1.2"], "new_net": "filt_out"},
             {
-                "op": "add_component",
-                "reference": "R5",
-                "lib_id": "Device:R",
-                "value": "1",
-                "pins": {"1": "dc_plus", "2": "filt_mid"},
+                "type": "component.add",
+                "component": {
+                    "reference": "R5",
+                    "lib_id": "Device:R",
+                    "value": "1",
+                    "pins": {"1": "dc_plus", "2": "filt_mid"},
+                },
             },
             {
-                "op": "add_component",
-                "reference": "L1",
-                "lib_id": "Device:L",
-                "value": "10u",
-                "pins": {"1": "filt_mid", "2": "filt_out"},
+                "type": "component.add",
+                "component": {
+                    "reference": "L1",
+                    "lib_id": "Device:L",
+                    "value": "10u",
+                    "pins": {"1": "filt_mid", "2": "filt_out"},
+                },
             },
         ]
     }
@@ -189,8 +210,9 @@ class CircuitEngineTests(unittest.TestCase):
             schematic = Path(temp_dir) / "work.kicad_sch"
             shutil.copy(FIXTURE, schematic)
             plan = {
+                "schema": "hephaistus/patch-plan/v1",
                 "operations": [
-                    {"op": "update_value", "reference": "R2", "value": "1.2"},
+                    {"type": "component.update_value", "reference": "R2", "value": "1.2"},
                 ]
             }
             result = apply_patch_plan(schematic, plan)
@@ -200,8 +222,9 @@ class CircuitEngineTests(unittest.TestCase):
     def test_rejects_missing_component(self):
         state = parse_schematic(FIXTURE)
         bad_plan = {
+            "schema": "hephaistus/patch-plan/v1",
             "operations": [
-                {"op": "set_pin_net", "reference": "RX999", "pin": "1", "net": "dc_plus"}
+                {"type": "pin.assign_net", "reference": "RX999", "pin": "1", "net": "dc_plus"}
             ]
         }
         with self.assertRaises(PatchPlanError):
@@ -218,14 +241,17 @@ class CircuitEngineTests(unittest.TestCase):
                 if component["reference"] == "C1"
             )
             bad_plan = {
+                "schema": "hephaistus/patch-plan/v1",
                 "operations": [
                     {
-                        "op": "add_component",
-                        "reference": "RX",
-                        "uuid": c1_uuid,
-                        "lib_id": "Device:R",
-                        "value": "1",
-                        "pins": {"1": "dc_plus", "2": "dc_minus"},
+                        "type": "component.add",
+                        "component": {
+                            "reference": "RX",
+                            "uuid": c1_uuid,
+                            "lib_id": "Device:R",
+                            "value": "1",
+                            "pins": {"1": "dc_plus", "2": "dc_minus"},
+                        },
                     }
                 ]
             }
@@ -243,10 +269,57 @@ class CircuitEngineTests(unittest.TestCase):
             schematic = Path(temp_dir) / "work.kicad_sch"
             shutil.copy(FIXTURE, schematic)
             original_text = schematic.read_text(encoding="utf-8")
-            plan = {"operations": [{"op": "update_value", "reference": "R2", "value": "100"}]}
+            plan = {
+                "schema": "hephaistus/patch-plan/v1",
+                "operations": [{"type": "component.update_value", "reference": "R2", "value": "100"}],
+            }
             result = apply_patch_plan(schematic, plan)
             self.assertEqual(result["status"], "no_changes")
             self.assertEqual(schematic.read_text(encoding="utf-8"), original_text)
+
+    def test_dry_run_validates_without_writing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            schematic = Path(temp_dir) / "work.kicad_sch"
+            shutil.copy(FIXTURE, schematic)
+            original_text = schematic.read_text(encoding="utf-8")
+            result = validate_patch_plan(schematic, insert_shunt_plan())
+            self.assertEqual(result["status"], "validated")
+            self.assertTrue(result["round_trip"]["parse_ok"])
+            self.assertIn("dc_plus", result["affected"]["nets"])
+            self.assertEqual(schematic.read_text(encoding="utf-8"), original_text)
+
+    def test_apply_result_is_structured(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            schematic = Path(temp_dir) / "work.kicad_sch"
+            shutil.copy(FIXTURE, schematic)
+            result = apply_patch_plan(schematic, insert_shunt_plan())
+            self.assertEqual(result["status"], "applied")
+            self.assertEqual(result["schema"], "hephaistus/patch-plan/v1")
+            self.assertEqual(result["intent"], "Insert current shunt")
+            self.assertTrue(result["plan_id"])
+            self.assertGreater(result["changed_operations"], 0)
+            self.assertEqual(result["affected"]["components"], ["R2", "R3"])
+            self.assertIn("dc_plus", result["affected"]["nets"])
+
+    def test_rejects_wrong_schema_version(self):
+        state = parse_schematic(FIXTURE)
+        plan = {
+            "schema": "hephaistus/patch-plan/v0",
+            "operations": [{"type": "component.update_value", "reference": "R2", "value": "100"}],
+        }
+        with self.assertRaises(PatchPlanError) as context:
+            mutate_state(state, plan)
+        self.assertEqual(context.exception.code, "INVALID_SCHEMA")
+
+    def test_rejects_unsupported_operation_with_stable_code(self):
+        state = parse_schematic(FIXTURE)
+        plan = {
+            "schema": "hephaistus/patch-plan/v1",
+            "operations": [{"type": "magic.rewire", "reference": "R2"}],
+        }
+        with self.assertRaises(PatchPlanError) as context:
+            mutate_state(state, plan)
+        self.assertEqual(context.exception.code, "UNSUPPORTED_OPERATION")
 
     def _find_kicad_cli(self):
         for candidate in KICAD_CLI_CANDIDATES:

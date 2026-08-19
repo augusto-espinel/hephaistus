@@ -31,6 +31,7 @@ The target workflow is:
 - [`docs/architecture.md`](docs/architecture.md)
 - [`docs/use_cases_blueprint.md`](docs/use_cases_blueprint.md)
 - [`docs/migration-from-vscode-prototype.md`](docs/migration-from-vscode-prototype.md)
+- [`docs/patch-plan-v1.md`](docs/patch-plan-v1.md)
 
 ## Status
 
@@ -39,7 +40,10 @@ The deterministic circuit backend has begun. Current implementation includes:
 - parser/apply wrappers ported into `backend/hephaistus_circuit/`;
 - explicit patch-plan API in `backend/hephaistus_circuit/engine.py`;
 - CLI entry point (`hephaistus-circuit parse` / `apply-plan`);
-- 10 deterministic round-trip/safety regression tests in `tests/test_circuit_engine.py`;
+- versioned `hephaistus/patch-plan/v1` contract with semantic operation types;
+- true `--dry-run` validation against temporary round-trip copies;
+- structured results with plan IDs, affected nets/components, deltas, warnings, and stable error codes;
+- 14 deterministic round-trip/safety regression tests in `tests/test_circuit_engine.py`;
 - chained split, parallel addition, RL chain/library embedding, value update, and rejection coverage;
 - usable KiCad 10 rectifier fixture at `fixtures/schematics/rectifier.kicad_sch`;
 - example patch at `examples/patches/insert_shunt.json`.

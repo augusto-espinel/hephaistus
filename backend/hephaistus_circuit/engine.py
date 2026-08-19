@@ -1,17 +1,27 @@
-"""Deterministic circuit patch engine.
-
-This module turns an explicit patch plan into a modified schematic state and
-then delegates safe text-level application to the ported KiCad apply backend.
-"""
+"""Deterministic circuit patch engine with hardened patch-plan contracts."""
 
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import shutil
+import tempfile
 import uuid as uuid_module
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional
 
+from .errors import (
+    APPLY_FAILED,
+    INTEGRITY_VIOLATION,
+    INVALID_SCHEMA,
+    ROUND_TRIP_FAILED,
+    UNKNOWN_COMPONENT,
+    UNKNOWN_PIN,
+    UNSUPPORTED_OPERATION,
+    PatchPlanError,
+)
 from .parser import parse_with_kiutils
 from .text_apply import (
     apply_delta_to_schematic,
@@ -19,19 +29,34 @@ from .text_apply import (
     validate_state_integrity,
 )
 
+SUPPORTED_SCHEMA = "hephaistus/patch-plan/v1"
 
-class PatchPlanError(ValueError):
-    """Raised when a patch plan cannot be validated."""
+CANONICAL_OPS = {
+    "pin.assign_net",
+    "net.split",
+    "component.add",
+    "component.update_value",
+    "component.remove",
+}
 
-
-SUPPORTED_OPS = {"set_pin_net", "add_component", "update_value", "remove_component"}
+LEGACY_OP_MAP = {
+    "set_pin_net": "pin.assign_net",
+    "add_component": "component.add",
+    "update_value": "component.update_value",
+    "remove_component": "component.remove",
+}
 
 
 def _new_uuid() -> str:
     return str(uuid_module.uuid4())
 
 
-def _component_index(state: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
+def _plan_id(plan: Mapping[str, Any]) -> str:
+    payload = json.dumps(plan, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _components_by_reference(state: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
     return {
         str(component.get("reference", "")): component
         for component in state.get("components", [])
@@ -39,36 +64,139 @@ def _component_index(state: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
     }
 
 
-def _set_pin_net(state: MutableMapping[str, Any], operation: Mapping[str, Any]) -> None:
-    reference = str(operation.get("reference", ""))
-    pin_number = str(operation.get("pin", ""))
-    new_net = str(operation.get("net", ""))
-    components = _component_index(state)
-    component = components.get(reference)
-    if component is None:
-        raise PatchPlanError(f"component '{reference}' does not exist")
+def _normalise_operation(operation: Mapping[str, Any], index: int) -> Dict[str, Any]:
+    op_type = operation.get("type") or operation.get("op")
+    if op_type is None:
+        raise PatchPlanError(
+            INVALID_SCHEMA,
+            f"operation at index {index} is missing 'type'",
+        )
 
-    for pin in component.get("pins", []):
-        if str(pin.get("number")) == pin_number:
-            pin["net"] = new_net
-            return
+    if op_type in LEGACY_OP_MAP:
+        op_type = LEGACY_OP_MAP[op_type]
 
-    raise PatchPlanError(f"pin '{reference}.{pin_number}' does not exist")
+    if op_type not in CANONICAL_OPS:
+        raise PatchPlanError(
+            UNSUPPORTED_OPERATION,
+            f"operation at index {index} uses unsupported type '{op_type}'",
+        )
+
+    if op_type == "net.split":
+        origin_net = operation.get("origin_net")
+        move_pins = operation.get("move_pins", [])
+        new_net = operation.get("new_net")
+        if not origin_net or not isinstance(move_pins, list) or not new_net:
+            raise PatchPlanError(
+                INVALID_SCHEMA,
+                "net.split requires origin_net, move_pins, and new_net",
+                {"index": index},
+            )
+        return {
+            "type": "pin.assign_net",
+            "semantic_type": "net.split",
+            "origin_net": str(origin_net),
+            "move_pins": [str(pin) for pin in move_pins],
+            "new_net": str(new_net),
+        }
+
+    return {"type": op_type, **dict(operation)}
+
+
+def normalised_operations(plan: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    operations = plan.get("operations")
+    schema = plan.get("schema")
+
+    if schema and schema != SUPPORTED_SCHEMA:
+        raise PatchPlanError(
+            INVALID_SCHEMA,
+            f"unsupported patch-plan schema '{schema}'",
+            {"expected": SUPPORTED_SCHEMA},
+        )
+    if not isinstance(operations, list) or not operations:
+        raise PatchPlanError(INVALID_SCHEMA, "patch plan has no operations")
+
+    return [_normalise_operation(op, index) for index, op in enumerate(operations)]
+
+
+def _resolve_pin_reference(reference_pin: str) -> tuple[str, str]:
+    if "." not in reference_pin:
+        raise PatchPlanError(
+            INVALID_SCHEMA,
+            f"pin reference '{reference_pin}' must use <COMPONENT>.<PIN> form",
+        )
+    reference, pin = reference_pin.split(".", 1)
+    return reference, pin
+
+
+def _assign_pin_net(state: MutableMapping[str, Any], operation: Mapping[str, Any]) -> None:
+    references: List[tuple[str, str]] = []
+    if operation.get("semantic_type") == "net.split":
+        references = [_resolve_pin_reference(pin) for pin in operation.get("move_pins", [])]
+        net = operation["new_net"]
+    else:
+        reference = operation.get("reference")
+        pin = operation.get("pin")
+        if not reference or not pin:
+            raise PatchPlanError(
+                INVALID_SCHEMA,
+                "pin.assign_net requires reference and pin",
+            )
+        references = [(str(reference), str(pin))]
+        net = str(operation.get("net", ""))
+
+    components = _components_by_reference(state)
+    for reference, pin_number in references:
+        component = components.get(reference)
+        if component is None:
+            raise PatchPlanError(
+                UNKNOWN_COMPONENT,
+                f"component '{reference}' does not exist",
+                {"operation": operation},
+            )
+        found = False
+        for pin in component.get("pins", []):
+            if str(pin.get("number")) == pin_number:
+                pin["net"] = str(net or "")
+                found = True
+                break
+        if not found:
+            raise PatchPlanError(
+                UNKNOWN_PIN,
+                f"pin '{reference}.{pin_number}' does not exist",
+                {"operation": operation},
+            )
 
 
 def _add_component(state: MutableMapping[str, Any], operation: Mapping[str, Any]) -> None:
-    reference = str(operation.get("reference", ""))
-    lib_id = str(operation.get("lib_id") or operation.get("libId") or "")
-    value = str(operation.get("value", ""))
-    pins = dict(operation.get("pins", {}) or {})
+    component_payload = operation.get("component")
+    if component_payload is None:
+        # Legacy add_component format
+        component_payload = {
+            "reference": operation.get("reference"),
+            "lib_id": operation.get("lib_id") or operation.get("libId"),
+            "value": operation.get("value", ""),
+            "pins": operation.get("pins", {}),
+            "uuid": operation.get("uuid"),
+        }
+    if not isinstance(component_payload, Mapping):
+        raise PatchPlanError(
+            INVALID_SCHEMA,
+            "component.add requires a component object",
+            {"operation": operation},
+        )
+
+    reference = str(component_payload.get("reference", ""))
+    lib_id = str(component_payload.get("lib_id") or component_payload.get("libId") or "")
+    value = str(component_payload.get("value", ""))
+    pins = dict(component_payload.get("pins", {}) or {})
 
     if not reference:
-        raise PatchPlanError("add_component requires 'reference'")
+        raise PatchPlanError(INVALID_SCHEMA, "component.add requires component.reference")
     if not lib_id:
-        raise PatchPlanError(f"add_component {reference} requires 'lib_id'")
-    components = _component_index(state)
+        raise PatchPlanError(INVALID_SCHEMA, "component.add requires component.lib_id")
+    components = _components_by_reference(state)
     if reference in components:
-        raise PatchPlanError(f"component '{reference}' already exists")
+        raise PatchPlanError(INTEGRITY_VIOLATION, f"component '{reference}' already exists")
 
     pin_entries = []
     for pin_number, net in pins.items():
@@ -81,7 +209,7 @@ def _add_component(state: MutableMapping[str, Any], operation: Mapping[str, Any]
             }
         )
 
-    component_uuid = str(operation.get("uuid") or _new_uuid())
+    component_uuid = str(component_payload.get("uuid") or _new_uuid())
     state.setdefault("components", []).append(
         {
             "uuid": component_uuid,
@@ -96,73 +224,179 @@ def _add_component(state: MutableMapping[str, Any], operation: Mapping[str, Any]
 
 def _update_value(state: MutableMapping[str, Any], operation: Mapping[str, Any]) -> None:
     reference = str(operation.get("reference", ""))
-    value = str(operation.get("value", ""))
-    components = _component_index(state)
+    value = operation.get("value")
+    if not reference:
+        raise PatchPlanError(INVALID_SCHEMA, "component.update_value requires reference")
+    components = _components_by_reference(state)
     component = components.get(reference)
     if component is None:
-        raise PatchPlanError(f"component '{reference}' does not exist")
-    component["value"] = value
-    component.setdefault("properties", {})["Value"] = value
+        raise PatchPlanError(UNKNOWN_COMPONENT, f"component '{reference}' does not exist")
+    component["value"] = str(value if value is not None else "")
+    component.setdefault("properties", {})["Value"] = str(value if value is not None else "")
 
 
 def _remove_component(state: MutableMapping[str, Any], operation: Mapping[str, Any]) -> None:
     reference = str(operation.get("reference", ""))
+    if not reference:
+        raise PatchPlanError(INVALID_SCHEMA, "component.remove requires reference")
     components = state.get("components", [])
     remaining = [component for component in components if component.get("reference") != reference]
     if len(remaining) == len(components):
-        raise PatchPlanError(f"component '{reference}' does not exist")
+        raise PatchPlanError(UNKNOWN_COMPONENT, f"component '{reference}' does not exist")
     state["components"] = remaining
 
 
 def apply_operation_to_state(state: MutableMapping[str, Any], operation: Mapping[str, Any]) -> None:
-    operations = operation.get("operations")
-    if isinstance(operations, (list, dict)):
-        raise PatchPlanError(
-            "top-level operation objects are supported only inside a plan with an 'operations' list"
-        )
-    op_name = operation.get("op")
-    if op_name == "set_pin_net":
-        _set_pin_net(state, operation)
-    elif op_name == "add_component":
+    op_type = operation.get("type")
+    if op_type == "pin.assign_net":
+        _assign_pin_net(state, operation)
+    elif op_type == "component.add":
         _add_component(state, operation)
-    elif op_name == "update_value":
+    elif op_type == "component.update_value":
         _update_value(state, operation)
-    elif op_name == "remove_component":
+    elif op_type == "component.remove":
         _remove_component(state, operation)
     else:
-        raise PatchPlanError(f"unsupported operation '{op_name or '<missing>'}'")
-
-
-def _validate_plan(plan: Mapping[str, Any]) -> List[Dict[str, Any]]:
-    operations = plan.get("operations")
-    if not isinstance(operations, list) or not operations:
-        raise PatchPlanError("patch plan must contain a non-empty 'operations' list")
-
-    normalized: List[Dict[str, Any]] = []
-    for index, operation in enumerate(operations):
-        if not isinstance(operation, Mapping):
-            raise PatchPlanError(f"operation at index {index} must be an object")
-        op_name = operation.get("op")
-        if op_name not in SUPPORTED_OPS:
-            raise PatchPlanError(f"operation at index {index} uses unsupported op '{op_name}'")
-        normalized.append(dict(operation))
-    return normalized
+        raise PatchPlanError(UNSUPPORTED_OPERATION, f"unsupported operation '{op_type}'")
 
 
 def mutate_state(original: Mapping[str, Any], plan: Mapping[str, Any]) -> Dict[str, Any]:
-    """Return a modified circuit state after validating and applying a plan."""
     modified: Dict[str, Any] = copy.deepcopy(dict(original))
-    for operation in _validate_plan(plan):
+    for operation in normalised_operations(plan):
         apply_operation_to_state(modified, operation)
     return modified
 
 
 def parse_schematic(schematic_path: Path | str) -> Dict[str, Any]:
-    """Parse a KiCad schematic into the derived circuit-state format."""
     parsed = parse_with_kiutils(str(schematic_path))
     if parsed is None:
-        raise PatchPlanError(f"could not parse schematic: {schematic_path}")
+        raise PatchPlanError(ROUND_TRIP_FAILED, f"could not parse schematic: {schematic_path}")
     return parsed
+
+
+def _validated_state_pair(
+    original: Mapping[str, Any],
+    plan: Mapping[str, Any],
+) -> Dict[str, Any]:
+    modified = mutate_state(original, plan)
+    original_errors = validate_state_integrity(original, "original")
+    modified_errors = validate_state_integrity(modified, "modified")
+    violations = original_errors + modified_errors
+    if violations:
+        raise PatchPlanError(
+            INTEGRITY_VIOLATION,
+            "integrity validation failed",
+            violations,
+        )
+    return modified
+
+
+def _changed_count(delta: Mapping[str, Any]) -> int:
+    return (
+        len(delta.get("value_changes", []))
+        + len(delta.get("added_components", []))
+        + len(delta.get("removed_components", []))
+        + len(delta.get("connection_changes", []))
+    )
+
+
+def _affected(delta: Mapping[str, Any]) -> Dict[str, List[str]]:
+    components = set()
+    nets = set()
+    for item in delta.get("value_changes", []):
+        components.add(str(item.get("reference", "")))
+    for item in delta.get("added_components", []):
+        reference = item.get("reference")
+        if reference:
+            components.add(str(reference))
+        for pin in item.get("pins", []):
+            if pin.get("net"):
+                nets.add(str(pin["net"]))
+    for item in delta.get("removed_components", []):
+        reference = item.get("reference")
+        if reference:
+            components.add(str(reference))
+    for item in delta.get("connection_changes", []):
+        reference = item.get("reference")
+        if reference:
+            components.add(str(reference))
+        if item.get("old_net"):
+            nets.add(str(item["old_net"]))
+        if item.get("new_net"):
+            nets.add(str(item["new_net"]))
+    return {
+        "components": sorted(item for item in components if item),
+        "nets": sorted(item for item in nets if item),
+    }
+
+
+def _result_envelope(
+    status: str,
+    plan: Mapping[str, Any],
+    *,
+    delta: Optional[Mapping[str, Any]] = None,
+    changes: Optional[List[str]] = None,
+    warnings: Optional[List[Dict[str, Any]]] = None,
+    round_trip: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload = {
+        "status": status,
+        "schema": plan.get("schema", SUPPORTED_SCHEMA),
+        "intent": plan.get("intent", ""),
+        "plan_id": _plan_id(plan),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "delta": delta or {},
+        "affected": _affected(delta or {}),
+        "changes": changes or [],
+        "warnings": warnings or [],
+    }
+    if round_trip is not None:
+        payload["round_trip"] = dict(round_trip)
+    return payload
+
+
+def validate_patch_plan(
+    schematic_path: Path | str,
+    plan: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Validate a plan and return a structured dry-run result without writes."""
+    path = Path(schematic_path)
+    original = parse_schematic(path)
+    modified = _validated_state_pair(original, plan)
+    delta = compute_delta(original, modified)
+    if _changed_count(delta) == 0:
+        return _result_envelope("no_changes", plan, delta=delta)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_schematic = Path(temp_dir) / path.name
+        shutil.copy2(path, temp_schematic)
+        success, changes, warnings = apply_delta_to_schematic(
+            str(temp_schematic),
+            delta,
+            original_json=original,
+            modified_json=modified,
+        )
+        round_trip = {"parse_ok": False, "erc_exit": None}
+        if success:
+            try:
+                parse_schematic(temp_schematic)
+                round_trip["parse_ok"] = True
+            except PatchPlanError:
+                round_trip["parse_ok"] = False
+    if not success or not round_trip.get("parse_ok"):
+        raise PatchPlanError(
+            ROUND_TRIP_FAILED,
+            "round-trip validation failed for patch plan",
+            changes,
+        )
+    return _result_envelope(
+        "validated",
+        plan,
+        delta=delta,
+        changes=changes,
+        warnings=warnings,
+        round_trip=round_trip,
+    )
 
 
 def apply_patch_plan(
@@ -171,47 +405,34 @@ def apply_patch_plan(
     output_path: Optional[Path | str] = None,
 ) -> Dict[str, Any]:
     """Validate and apply an explicit patch plan to a KiCad schematic."""
-    path = Path(schematic_path)
-    original = parse_schematic(path)
-    modified = mutate_state(original, plan)
+    validated = validate_patch_plan(schematic_path, plan)
+    if validated["status"] == "no_changes":
+        validated["changed_operations"] = []
+        return validated
 
-    original_errors = validate_state_integrity(original, "original")
-    modified_errors = validate_state_integrity(modified, "modified")
-    violations = original_errors + modified_errors
-    if violations:
-        raise PatchPlanError("integrity validation failed: " + "; ".join(violations))
-
+    original = parse_schematic(schematic_path)
+    modified = _validated_state_pair(original, plan)
     delta = compute_delta(original, modified)
-    total_changes = (
-        len(delta.get("value_changes", []))
-        + len(delta.get("added_components", []))
-        + len(delta.get("removed_components", []))
-        + len(delta.get("connection_changes", []))
-    )
-    if total_changes == 0:
-        return {
-            "status": "no_changes",
-            "changed_operations": [],
-            "delta": delta,
-        }
-
     success, changes, warnings = apply_delta_to_schematic(
-        str(path),
+        str(schematic_path),
         delta,
         output_path=str(output_path) if output_path else None,
         original_json=original,
         modified_json=modified,
     )
     if not success:
-        raise PatchPlanError("apply failed: " + "; ".join(changes))
+        raise PatchPlanError(APPLY_FAILED, "apply failed", changes)
 
-    return {
-        "status": "applied",
-        "changed_operations": len(changes),
-        "changes": changes,
-        "warnings": warnings,
-        "delta": delta,
-    }
+    payload = _result_envelope(
+        "applied",
+        plan,
+        delta=delta,
+        changes=changes,
+        warnings=warnings,
+        round_trip=validated.get("round_trip"),
+    )
+    payload["changed_operations"] = len(changes)
+    return payload
 
 
 def load_patch_plan(path: Path | str) -> Dict[str, Any]:
