@@ -56,3 +56,11 @@ Desktop.ini
 
 # Local tooling venv (parser/apply wrappers)
 .venv/
+
+# Legacy local-test artifacts retained outside tracked scope
+tests/agent/
+tests/python/
+tests/typescript/
+tests/user/
+tests/test_round_trip.sh
+tests/test_roundtrip_manual.sh
