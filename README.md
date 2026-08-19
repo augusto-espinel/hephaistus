@@ -39,7 +39,8 @@ The deterministic circuit backend has begun. Current implementation includes:
 - parser/apply wrappers ported into `backend/hephaistus_circuit/`;
 - explicit patch-plan API in `backend/hephaistus_circuit/engine.py`;
 - CLI entry point (`hephaistus-circuit parse` / `apply-plan`);
-- S1 series-shunt round-trip regression test in `tests/test_circuit_engine.py`;
+- 10 deterministic round-trip/safety regression tests in `tests/test_circuit_engine.py`;
+- chained split, parallel addition, RL chain/library embedding, value update, and rejection coverage;
 - usable KiCad 10 rectifier fixture at `fixtures/schematics/rectifier.kicad_sch`;
 - example patch at `examples/patches/insert_shunt.json`.
 
