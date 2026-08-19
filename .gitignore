@@ -54,7 +54,5 @@ Desktop.ini
 *.temp
 .cache/
 
-# Local test workspace (user schematics, generated JSON, logs, backups)
-tests/
 # Local tooling venv (parser/apply wrappers)
 .venv/

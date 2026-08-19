@@ -1,0 +1,20 @@
+{
+  "operations": [
+    {
+      "op": "set_pin_net",
+      "reference": "R2",
+      "pin": "2",
+      "net": "dc_plus_shunt"
+    },
+    {
+      "op": "add_component",
+      "reference": "R3",
+      "lib_id": "Device:R",
+      "value": "0.001",
+      "pins": {
+        "1": "dc_plus",
+        "2": "dc_plus_shunt"
+      }
+    }
+  ]
+}

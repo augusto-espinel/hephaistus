@@ -34,4 +34,17 @@ The target workflow is:
 
 ## Status
 
-This branch currently contains a clean product/architecture foundation plus retained fixture material. Implementation should start from the new backend and companion UI layers defined in `docs/architecture.md`.
+The deterministic circuit backend has begun. Current implementation includes:
+
+- parser/apply wrappers ported into `backend/hephaistus_circuit/`;
+- explicit patch-plan API in `backend/hephaistus_circuit/engine.py`;
+- CLI entry point (`hephaistus-circuit parse` / `apply-plan`);
+- S1 series-shunt round-trip regression test in `tests/test_circuit_engine.py`;
+- usable KiCad 10 rectifier fixture at `fixtures/schematics/rectifier.kicad_sch`;
+- example patch at `examples/patches/insert_shunt.json`.
+
+Run tests with:
+
+```bash
+.venv/bin/python -m unittest tests.test_circuit_engine -v
+```

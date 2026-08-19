@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hephaistus-circuit"
+version = "0.1.0"
+description = "Deterministic KiCad schematic patch backend for HephAIstus"
+requires-python = ">=3.9"
+dependencies = [
+  "kiutils>=1.4",
+]
+
+[project.scripts]
+hephaistus-circuit = "hephaistus_circuit.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "backend"}
+
+[tool.setuptools.packages.find]
+where = ["backend"]

@@ -1,7 +1,3 @@
 # Schematic Fixtures
 
-Example KiCad schematic files for testing.
-
-## Files
-
-- `schematic.kicad_sch` - Example KiCad schematic for testing ingestion and sync
+- `rectifier.kicad_sch` — real KiCad 10 rectifier fixture used for deterministic parse/apply round-trip tests.
