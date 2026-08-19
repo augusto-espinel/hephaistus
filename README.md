@@ -1,138 +1,37 @@
 # HephAIstus
 
-**LLM-Driven Circuit Optimization for VS Code**
+HephAIstus is an AI copilot for KiCad schematic design and circuit simulation.
 
-HephAIstus is a VS Code extension that bridges KiCad schematic design with Python/SPICE simulation workflows. It enables **Decoupled Collaboration**: the engineer maintains spatial control of the visual schematic, while an LLM-backed agent handles mathematical optimization and simulation in the background.
+It is being rebuilt as a **companion application** that sits beside KiCad, understands schematic and simulation context, answers engineering questions, and applies previewable, validated changes without requiring the user to copy files, screenshots, or console output into an external chat.
 
-## Architecture
+## Current branch
 
-The system operates across three pillars:
-1. **Schematic** (`.kicad_sch`) — Human's source of truth; geometry is immutable
-2. **JSON State** (`state.json`) — Machine-readable ledger for LLM reasoning
-3. **Code** (Python/SKiDL) — Simulation catalyst for iterative optimization
+`feature/companion-reset` is a deliberate architectural reset. The previous VS Code extension prototype is preserved in:
 
-### Project Structure
+- Branch: `archive/vscode-prototype`
+- Tag: `vscode-prototype-2026-08-19`
+- Optional local worktree: `../hephaistus-legacy`
 
-```
-hephaistus/
-├── src/                    # TypeScript extension
-│   ├── services/           # Core services (ingestion, patching)
-│   ├── python/             # Python bridge services
-│   └── ui/                 # VS Code UI components
-├── python/                 # Python package
-│   └── hephaistus/
-│       ├── kicad_sync/     # KiCad synchronization
-│       ├── simulation/     # SPICE simulation (planned)
-│       └── utils/          # Common utilities
-├── tests/                  # Test suites
-│   ├── typescript/
-│   └── python/
-├── fixtures/               # Test fixtures
-├── scripts/                # Utility scripts
-└── docs/                   # Documentation
-```
+## Product direction
 
-## Quick Start
+The target workflow is:
 
-### Prerequisites
+1. Open a KiCad schematic or simulation window.
+2. Ask HephAIstus about the circuit, ERC report, simulation parameters, console output, or waveform results.
+3. Receive explanations or a deterministic patch plan.
+4. Preview the proposed change.
+5. Apply it only after validation.
+6. Re-run ERC and/or simulation automatically.
+7. Keep an auditable history with rollback information.
 
-- VS Code 1.85+
-- Python 3.9+ (for KiCad parsing and simulation)
-- Node.js 18+
+## Core documents
 
-### Installation
+- [`docs/vision.md`](docs/vision.md)
+- [`docs/spec.md`](docs/spec.md)
+- [`docs/architecture.md`](docs/architecture.md)
+- [`docs/use_cases_blueprint.md`](docs/use_cases_blueprint.md)
+- [`docs/migration-from-vscode-prototype.md`](docs/migration-from-vscode-prototype.md)
 
-1. Install the extension from VS Code Marketplace
-2. Open a KiCad project
-3. Run "HephAIstus: Initialize Project" from the Command Palette
+## Status
 
-### Python Setup
-
-The extension requires Python dependencies for KiCad parsing and simulation:
-
-```bash
-# Automatic setup (on first activation)
-# Or manual setup:
-cd python
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### Configuration
-
-Configure LLM backends in VS Code settings:
-
-```json
-{
-  "hephaistus.ollama.endpoint": "http://localhost:11434",
-  "hephaistus.openrouter.apiKey": "your-api-key",
-  "hephaistus.execution.maxSteps": 100,
-  "hephaistus.execution.timeoutSeconds": 60
-}
-```
-
-## Typical Workflow
-
-1. **Modify KiCad schematic** and save
-2. **Trigger optimization** via Command Palette: "HephAIstus: Optimize Circuit"
-3. **Review LLM suggestions** in the patch viewer
-4. **Accept/Reject patches** to apply changes
-5. **Run simulation** to validate optimization
-
-## Features
-
-### KiCad Synchronization
-- Bidirectional sync between KiCad schematics and JSON state
-- Preserve component positions while updating values
-- Staging area for new components
-
-### LLM Integration
-- Local Ollama for ingestion and drift proposals
-- Cloud OpenRouter for optimization passes
-- Streaming output in VS Code webview
-
-### SPICE Simulation (Planned)
-- SKiDL schematic generation
-- ngspice simulation execution
-- inspire circuit analysis
-
-## Development
-
-### Build
-
-```bash
-npm install
-npm run compile
-```
-
-### Test
-
-```bash
-npm test                    # TypeScript tests
-cd python && pytest         # Python tests
-```
-
-### Project Setup
-
-```bash
-# Bootstrap Python environment
-scripts/bootstrap-venv.sh
-
-# Post-install hook
-npm run postinstall
-```
-
-## Documentation
-
-- [Specification](docs/spec.md) — Complete system specification
-- [Architecture](docs/architecture.md) — Technical architecture details
-- [KiCad Sync](docs/python/kicad-sync.md) — KiCad synchronization module
-
-## License
-
-MIT
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+This branch currently contains a clean product/architecture foundation plus retained fixture material. Implementation should start from the new backend and companion UI layers defined in `docs/architecture.md`.

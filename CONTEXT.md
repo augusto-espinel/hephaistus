@@ -1,156 +1,39 @@
-# HephAIstus Project Context
+# HephAIstus Context
 
-> Read this file to quickly get up to speed with the project.
+Last updated: 2026-08-19
 
-## What is HephAIstus?
+## Project
 
-HephAIstus is a VS Code extension that bridges KiCad schematic design with Python/SPICE simulation workflows. It enables **Decoupled Collaboration**: the engineer maintains spatial control of the visual schematic, while an LLM-backed agent handles mathematical optimization and simulation.
+HephAIstus is being rebuilt as an AI-assisted KiCad schematic and simulation copilot.
 
-## Quick Start for AI Sessions
+The new product target is a companion window beside KiCad. It reads schematic files, simulation results, validation reports, and console output directly; answers questions in context; and applies previewable, validated changes.
 
-When starting a new session, read these files in order:
+This avoids the current copy/paste workflow where schematics, screenshots, raw outputs, and logs are manually moved into an external chat.
 
-### 1. Vision & Use Cases
-```
-docs/vision.md
-```
-Start here. This explains *why* the project exists and *what* it's trying to achieve.
+## Repository reset
 
-### 2. Architecture
-```
-docs/architecture.md
-```
-Technical architecture, component responsibilities, and design decisions.
+On 2026-08-19, the VS Code extension prototype was archived and the product reset was started.
 
-### 3. Specification
-```
-docs/spec.md
-```
-File structure, service status, configuration schema, and implementation details.
+- Archive branch: `archive/vscode-prototype`
+- Archive tag: `vscode-prototype-2026-08-19`
+- Reset branch: `feature/companion-reset`
+- Suggested local legacy worktree: `../hephaistus-legacy`
 
-### 4. Recent Memory Logs
-```
-~/.openclaw/workspace/memory/YYYY-MM-DD.md
-```
-Check the most recent memory files for the latest work, decisions, and context.
+The old implementation remains available for reference but is not part of the new build surface.
 
-## Key Concepts
+## Current architectural stance
 
-| Concept | Summary |
-|---------|---------|
-| **Decoupled Collaboration** | Human owns the canvas (geometry), AI owns the math (values, optimization) |
-| **Three Pillars** | Schematic (.kicad_sch) ↔ JSON State (state.json) ↔ Python/SKiDL (simulation) |
-| **Iteration Budget** | LLM can iterate N times autonomously before checkpoint |
-| **Permission Levels** | `values` → `add` → `delete` → `restructure` (progressive trust) |
-| **Stub Connections** | Connectivity applied as wire+label stubs; nets split/join via clear-and-stub restructuring |
-| **Tiered Models** | Local cheap models for sync, frontier models for optimization |
+- **Schematic is the source of truth.** The circuit graph/state is derived from KiCad files at runtime.
+- **Backend is deterministic.** LLM output must be validated and converted into explicit patch operations.
+- **UI is a companion application.** A docked KiCad panel is a future option once schematic IPC support matures.
+- **Use KiCad-native tools.** Prefer `kicad-cli` for ERC/netlist export and native file parsers for `.kicad_sch` mutation.
+- **Simulation output is first-class context.** HephAIstus should own simulation runs and capture raw waveforms, stdout/stderr, and convergence diagnostics.
 
-## Project Structure
+## Implementation priorities
 
-```
-hephaistus/
-├── src/                    # TypeScript extension
-│   ├── services/           # Core services (ingestion, patching, sync)
-│   ├── python/             # Python bridge services
-│   └── ui/                 # VS Code UI components
-├── python/hephaistus/      # Python package
-│   ├── kicad_sync/         # KiCad synchronization
-│   └── simulation/         # SPICE simulation (planned)
-├── fixtures/               # Test data
-├── docs/                   # Documentation
-│   ├── vision.md           # Vision and use cases
-│   ├── architecture.md     # Technical architecture
-│   ├── spec.md             # Implementation spec
-│   └── python/             # Python module docs
-└── tests/                  # Test suites
-```
-
-## Current Status (2026-08-04)
-
-### Working ✅
-
-- Extension activation
-- File watcher detection
-- Python/KiUtils path resolution
-- KiCad 10 parsing (including multi-island stub nets sharing a label)
-- JSON state generation
-- State file tracking
-- TypeScript compilation (0 errors)
-- **Manual sync workflow**:
-  - Parse KiCad → JSON (one-way)
-  - Apply JSON → KiCad (one-way)
-- **Sync status detection**:
-  - Tracks last sync timestamp and source
-  - Detects KiCad vs JSON newer states
-  - Visual indicators (🔴/🔵/🟢)
-- **Recommended action highlighting**
-- **Confirmation dialogs** for destructive operations
-- **Restore from JSON** - Discard KiCad changes option
-- **Stub-based apply flow** (2026-08-04):
-  - Component additions: staging placement + per-pin stubs, KiCad 6+ instance format
-  - Net restructuring: series insertion / net splits applied via clear-and-stub
-  - Library auto-embedding: missing lib symbols pulled from installed KiCad libraries
-  - Residual warnings only (missing library, power-net anchor)
-- **Agent E2E suite**: `tests/agent/stub_apply_e2e.py` — 26 checks, 6 scenarios; `kicad-cli` ERC clean
-
-### Known Limitations
-
-- Symbols using `(extends ...)` inheritance can't be auto-embedded yet
-- Restructured nets lose drawn wires (stubs guarantee connectivity, not aesthetics) — user redraws when convenient
-- LLM integration not yet wired
-- Simulation module (SKiDL/ngspice) not implemented
-
-### Last Milestone
-
-**Stub-Based Net Restructuring (2026-08-04)**: The apply flow was rebuilt around stubs (wire + net label) instead of physical wire-breaking advice. Series insertion and net splits are expressed purely as pin net re-assignments in JSON and applied deterministically. Commit `30414da`.
-
-## Development Commands
-
-```bash
-npm run build      # Build TypeScript
-npm run watch      # Watch mode
-npm run package    # Package extension
-npm run test       # Run tests
-```
-
-## Development Philosophy
-
-From Augusto (project owner):
-
-> The existing code was produced by less advanced models over multiple sessions without proper testing. It should be treated as design documentation showing intended architecture and data flow, not as working code. A major rework will be needed when development resumes.
-
-## Commands to Bootstrap Context
-
-In a new session, you can say:
-
-```
-Read the HephAIstus context file and get up to speed with the project.
-```
-
-Or more explicitly:
-
-```
-Read hephaistus/CONTEXT.md, then read docs/vision.md, docs/architecture.md, and the most recent memory logs.
-```
-
-## Repository
-
-**GitHub:** https://github.com/augusto-espinel/hephaistus
-
-The codebase is versioned and pushed to GitHub. Contributors can clone and follow this context file to get up to speed.
-
-## Next Steps (Priority Order)
-
-1. **Validate stub apply in KiCad GUI** — Augusto to open stub-applied schematics (E2E S1/S4 scenarios) and judge ergonomics
-2. **Wire LLM integration** — Connect optimization model to ingestion; the AI contract is now purely logical (pin net re-assignments)
-3. **Use consolidated test specs** — User: `docs/testing/USER-TESTS.md`; Agent: `docs/testing/AGENT-TESTS.md` (`npm run test:agent`, stub E2E via `.venv/bin/python3 tests/agent/stub_apply_e2e.py`)
-4. **Test full workflow** — End-to-end with simulation (stub-applied schematics are simulatable immediately)
-5. **Advice ledger (optional cleanup)** — Track aesthetic re-wiring suggestions as verifiable advice (`docs/use_cases_blueprint.md` §2)
-
-## Notes for AI
-
-- The project targets hobbyists, students, and professionals — keep this audience range in mind
-- The "stubs" pattern is now the applied mechanism, not just a pattern: all new connectivity is wire+label stubs; restructured nets are cleared and re-stubbed. Users redraw wires only for aesthetics
-- The project is KiCad-first but architecturally CAD-agnostic (PLECS, GeckoCircuits future targets)
-- Always check memory logs for the latest decisions and context before making changes
-- **GitHub repo exists** — commit significant changes, keep .gitignore updated
+1. Product specification and architecture grounding.
+2. Schematic round-trip proof of concept.
+3. Deterministic backend package.
+4. Simulation context pipeline.
+5. Companion chat UI.
+6. Optional future KiCad IPC adapter.
