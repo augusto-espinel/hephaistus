@@ -121,6 +121,7 @@ class CircuitEngineTests(unittest.TestCase):
             if erc:
                 completed = subprocess.run(
                     [erc, "sch", "erc", str(schematic)],
+                    cwd=temp_dir,
                     capture_output=True,
                     text=True,
                     check=False,
