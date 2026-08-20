@@ -315,12 +315,71 @@ Navigate past decisions, search by keyword, filter by date.
 
 ---
 
+## LLM Provider Architecture
+
+### Provider Interface
+
+The LLM abstraction supports multiple backends through a unified interface:
+
+```python
+class LLMProvider(Protocol):
+    name: str
+    
+    def complete(self, prompt: str, config: LLMConfig) -> LLMResponse: ...
+    def stream(self, prompt: str, config: LLMConfig) -> AsyncIterator[str]: ...
+    def count_tokens(self, text: str) -> int: ...
+    def models(self) -> list[ModelInfo]: ...
+```
+
+### Supported Providers
+
+| Provider | Use Case | Configuration |
+|----------|----------|---------------|
+| **OpenRouter** | Cloud models (Claude, GPT, Gemini) | API key, model selection |
+| **Ollama** | Local inference, privacy-sensitive | Base URL (localhost or remote) |
+| **OpenAI** | Direct OpenAI API | API key, organization |
+
+### Configuration Schema
+
+```json
+{
+  "hephaistus.llm.provider": "openrouter" | "ollama" | "openai",
+  "hephaistus.llm.model": "claude-3.5-sonnet" | "llama3.1:70b",
+  "hephaistus.llm.openrouter.apiKey": "${OPENROUTER_API_KEY}",
+  "hephaistus.llm.ollama.baseUrl": "http://localhost:11434",
+  "hephaistus.llm.temperature": 0.7,
+  "hephaistus.llm.maxTokens": 4096
+}
+```
+
+### Module Structure
+
+```
+backend/hephaistus_llm/
+├── __init__.py
+├── base.py           # Protocol + data classes
+├── config.py         # LLMConfig, ProviderConfig
+├── providers/
+│   ├── __init__.py
+│   ├── openrouter.py # OpenRouter API client
+│   ├── ollama.py    # Ollama client (local/remote)
+│   └── openai.py     # OpenAI direct API
+└── orchestrator.py   # ContextService → Provider wiring
+```
+
+---
+
 ## Implementation Roadmap
 
-- **Phase 3.1:** ContextService (layered assembly, token management)
-- **Phase 3.2:** SessionManager (state persistence, debugging)
+- **Phase 3.1:** ContextService (layered assembly, token management) ✅ **DONE**
+- **Phase 3.2:** SessionManager (state persistence, debugging) ✅ **DONE**
 - **Phase 3.3:** HistoryStore (SQLite, search)
-- **Phase 3.4:** LLM Orchestration (patch planning, validation)
+- **Phase 3.4:** LLM Orchestration
+  - **3.4.1:** Provider interface (`hephaistus_llm/base.py`)
+  - **3.4.2:** OpenRouter provider
+  - **3.4.3:** Ollama provider (local + remote)
+  - **3.4.4:** Orchestrator (ContextService → LLM)
+  - **3.4.5:** Response parsing + validation
 - **Phase 3.5:** Companion UI (Tauri + React)
 - **Phase 3.6:** Integration Testing (end-to-end)
 
