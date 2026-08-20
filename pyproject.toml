@@ -9,6 +9,9 @@ description = "Deterministic KiCad schematic patch backend for HephAIstus"
 requires-python = ">=3.9"
 dependencies = [
   "kiutils>=1.4",
+  "fastapi>=0.109",
+  "uvicorn>=0.27",
+  "pydantic>=2.5",
 ]
 
 [project.scripts]
@@ -16,6 +19,7 @@ hephaistus-circuit = "hephaistus_circuit.cli:main"
 hephaistus-simulation = "hephaistus_simulation.cli:main"
 hephaistus-context = "hephaistus_context.cli:main"
 hephaistus-llm = "hephaistus_llm.cli:main"
+hephaistus-api = "api.server:run_server"
 
 [tool.setuptools]
 package-dir = {"" = "backend"}

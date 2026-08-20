@@ -1,5 +1,7 @@
 import { useState, useCallback } from 'react'
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
 interface UseApiResult<T> {
   data: T | null
   loading: boolean
@@ -16,8 +18,11 @@ export function useApi<T>(): UseApiResult<T> {
     setLoading(true)
     setError(null)
 
+    // Prepend base URL if not already absolute
+    const fullUrl = url.startsWith('http') ? url : `${API_BASE_URL}${url}`
+
     try {
-      const response = await fetch(url, {
+      const response = await fetch(fullUrl, {
         headers: {
           'Content-Type': 'application/json',
           ...options?.headers,
@@ -40,3 +45,5 @@ export function useApi<T>(): UseApiResult<T> {
 
   return { data, loading, error, execute }
 }
+
+export { API_BASE_URL }
