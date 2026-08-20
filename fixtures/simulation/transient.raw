@@ -1,0 +1,16 @@
+Title: * rectifier.cir
+Date: Thu Aug 20 19:00:00 2026
+Plotname: Transient Analysis
+Plottype: transient
+Dimensions: 2
+Variables: 3
+0 time time
+1 v(inp) voltage
+2 v(out) voltage
+Values:
+0 0.000000 0.000000 0.000000
+1 0.000001 0.001000 0.001000
+2 0.000002 0.002000 0.002000
+3 0.000003 0.003000 0.003000
+4 0.000004 0.004000 0.004000
+5 0.000005 0.005000 0.005000

@@ -1,0 +1,32 @@
+Circuit: * /path/to/schematic.cir
+
+Doing analysis at TEMP = 27.000000
+
+No. of Data Rows : 101
+Transient Analysis
+Initial Transient Solution
+----------
+Node                                 Voltage
+----                                 -------
+v(inp)                             0.000000
+v(out)                             0.000000
+v(mid)                             0.000000
+
+Initial conditions set by .ic or .nodeset
+
+Transient Analysis ...
+  Time: 0.000000 seconds
+
+Warning: timestep too small at t=0.000001
+
+Error: simulation returned bad status
+
+ TRAN:  Timestep too small; trouble with node v(out)
+
+Note: Use 'option interp' for better accuracy when plotting.
+
+
+Reference value : 1.00000
+
+No. of Data Rows : 0
+ aborted simulation run(s)

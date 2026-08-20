@@ -37,6 +37,8 @@ CANONICAL_OPS = {
     "component.add",
     "component.update_value",
     "component.remove",
+    "simulation.set_directive",
+    "simulation.remove_directive",
 }
 
 LEGACY_OP_MAP = {
@@ -246,6 +248,71 @@ def _remove_component(state: MutableMapping[str, Any], operation: Mapping[str, A
     state["components"] = remaining
 
 
+def _set_simulation_directive(state: MutableMapping[str, Any], operation: Mapping[str, Any]) -> None:
+    """Create or update a simulation directive."""
+    directive_type = str(operation.get("directive", "") or operation.get("type", "")).lower()
+    parameters = dict(operation.get("parameters", {}) or {})
+    
+    if not directive_type:
+        raise PatchPlanError(INVALID_SCHEMA, "simulation.set_directive requires directive type")
+    
+    # Import here to avoid circular dependency
+    from .simulation_directive import create_directive_text, validate_directive_type
+    
+    if not validate_directive_type(directive_type):
+        raise PatchPlanError(
+            UNSUPPORTED_OPERATION,
+            f"unsupported simulation directive type '{directive_type}'",
+            {"operation": operation},
+        )
+    
+    # Build directive text
+    directive_text = create_directive_text(directive_type, parameters)
+    
+    # Check if directive of this type already exists
+    directives = state.setdefault("simulation_directives", [])
+    existing = None
+    for d in directives:
+        if d.get("directive_type") == directive_type:
+            existing = d
+            break
+    
+    if existing:
+        # Update existing
+        existing["text"] = directive_text
+        existing["parameters"] = parameters
+    else:
+        # Add new
+        directives.append({
+            "uuid": _new_uuid(),
+            "text": directive_text,
+            "directive_type": directive_type,
+            "parameters": parameters,
+            "position": operation.get("position", (0, 0, 0)),
+            "exclude_from_sim": operation.get("exclude_from_sim", False),
+        })
+
+
+def _remove_simulation_directive(state: MutableMapping[str, Any], operation: Mapping[str, Any]) -> None:
+    """Remove a simulation directive."""
+    directive_type = str(operation.get("directive", "") or operation.get("type", "")).lower()
+    
+    if not directive_type:
+        raise PatchPlanError(INVALID_SCHEMA, "simulation.remove_directive requires directive type")
+    
+    directives = state.get("simulation_directives", [])
+    remaining = [d for d in directives if d.get("directive_type") != directive_type]
+    
+    if len(remaining) == len(directives):
+        raise PatchPlanError(
+            INVALID_SCHEMA,
+            f"simulation directive '{directive_type}' does not exist",
+            {"operation": operation},
+        )
+    
+    state["simulation_directives"] = remaining
+
+
 def apply_operation_to_state(state: MutableMapping[str, Any], operation: Mapping[str, Any]) -> None:
     op_type = operation.get("type")
     if op_type == "pin.assign_net":
@@ -256,6 +323,10 @@ def apply_operation_to_state(state: MutableMapping[str, Any], operation: Mapping
         _update_value(state, operation)
     elif op_type == "component.remove":
         _remove_component(state, operation)
+    elif op_type == "simulation.set_directive":
+        _set_simulation_directive(state, operation)
+    elif op_type == "simulation.remove_directive":
+        _remove_simulation_directive(state, operation)
     else:
         raise PatchPlanError(UNSUPPORTED_OPERATION, f"unsupported operation '{op_type}'")
 
@@ -297,6 +368,7 @@ def _changed_count(delta: Mapping[str, Any]) -> int:
         + len(delta.get("added_components", []))
         + len(delta.get("removed_components", []))
         + len(delta.get("connection_changes", []))
+        + len(delta.get("simulation_changes", []))
     )
 
 

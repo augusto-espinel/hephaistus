@@ -1,0 +1,22 @@
+{
+  "schema": "hephaistus/patch-plan/v1",
+  "intent": "Update simulation options and add transient analysis",
+  "operations": [
+    {
+      "type": "simulation.set_directive",
+      "directive": "options",
+      "parameters": {
+        "method": "trap",
+        "reltol": "0.001"
+      }
+    },
+    {
+      "type": "simulation.set_directive",
+      "directive": "tran",
+      "parameters": {
+        "step": "1u",
+        "stop": "10m"
+      }
+    }
+  ]
+}

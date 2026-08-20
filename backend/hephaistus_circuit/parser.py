@@ -10,6 +10,7 @@ import sys
 import json
 import os
 from typing import Optional, Dict, List, Any
+from .simulation_directive import parse_text_elements, SimulationDirective
 
 # Setup KiCad environment before importing kiutils
 def setup_kicad_env():
@@ -438,6 +439,9 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                 "comment": getattr(title_block, 'comment', [])
             }
         
+        # Parse simulation directives (text elements starting with '.')
+        directives = parse_text_elements(schematic)
+        
         return {
             "schemaVersion": "1.1.0",
             "source": os.path.basename(path),
@@ -446,6 +450,14 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
             "nets": nets,
             "wires": [{"uuid": w["uuid"], "points": [{"x": p[0], "y": p[1]} for p in w["points"]]} for w in wire_segments],
             "junctions": [{"uuid": j, "position": {"x": p[0], "y": p[1]}} for j, p in [(j, list(junction_positions)[i]) for i, j in enumerate(list(junction_positions))]],
+            "simulation_directives": [{
+                "uuid": d.uuid,
+                "text": d.text,
+                "directive_type": d.directive_type,
+                "parameters": d.parameters,
+                "position": list(d.position),
+                "exclude_from_sim": d.exclude_from_sim
+            } for d in directives],
             "titleBlock": title_info,
             "metadata": {
                 "parser": "kiutils",

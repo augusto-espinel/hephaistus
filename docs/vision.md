@@ -1,8 +1,8 @@
 # HephAIstus Vision
 
-Version: 2.0
-Date: 2026-08-19
-Status: Product reset baseline
+Version: 2.1
+Date: 2026-08-20
+Status: Implementation progress
 
 ## One-sentence vision
 
@@ -79,6 +79,8 @@ The user should be able to open a KiCad schematic and ask:
 - "Insert a current shunt between these two components and rerun."
 
 The copilot should answer with context, propose a patch when appropriate, and apply it only with explicit confirmation.
+
+**Implemented:** Stub-based restructuring is fully working for series insertions and net re-assignments. The "insert a current shunt" use case (UC-07) is validated with 26/26 tests passing and kicad-cli ERC confirmation.
 
 ## Strategic boundary
 

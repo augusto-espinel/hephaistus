@@ -1,8 +1,8 @@
 # HephAIstus Use Cases Blueprint
 
-Version: 2.0
-Date: 2026-08-19
-Status: Product reset baseline
+Version: 2.1
+Date: 2026-08-20
+Status: Implementation progress
 
 ## Purpose
 
@@ -141,6 +141,8 @@ A recommendation plus a previewable schematic/simulation recipe if the user requ
 
 A stub-based patch plan that splits the net, introduces the shunt, re-parses, and validates via ERC.
 
+**Implementation status:** ✅ **Implemented** (2026-08-04). Stub-based restructuring supports series insertions, chained splits, parallel additions, and library symbol embedding. 26/26 tests passing. kicad-cli ERC confirms zero new violations vs fixture baseline.
+
 ---
 
 ### UC-08: Add or modify a simulation model
@@ -204,9 +206,9 @@ Simulation patches may be applied after preview.
 
 ### Milestone 3: Schematic Agent
 
-- UC-07 insert a measurement shunt;
-- UC-09 patch preview/apply;
-- UC-10 rollback/audit.
+- UC-07 insert a measurement shunt — ✅ **Implemented** (stub-based restructuring)
+- UC-09 patch preview/apply — partial (apply validated, preview UI pending)
+- UC-10 rollback/audit — not yet implemented
 
 Schematic mutations use the stub-based apply flow and validation gates.
 

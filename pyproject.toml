@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 hephaistus-circuit = "hephaistus_circuit.cli:main"
+hephaistus-simulation = "hephaistus_simulation.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "backend"}

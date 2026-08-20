@@ -1,0 +1,21 @@
+Circuit: * rectifier.cir
+
+Doing analysis at TEMP = 27.000000
+
+Operating Point
+
+Node            Voltage
+----            -------
+v(inp)          3.312345
+v(out)          5.000000
+v(mid)          2.500000
+v(gnd)          0.000000
+
+Source          Current
+------          -------
+v1#branch       -0.001234
+i1#branch       0.000500
+
+Total current: 0.001734
+
+Analysis complete

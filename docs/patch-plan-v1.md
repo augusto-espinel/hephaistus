@@ -91,6 +91,40 @@ Remove a component by UUID through the deterministic text-level deletion path.
 {"type": "component.remove", "reference": "R3"}
 ```
 
+### `simulation.set_directive`
+
+Create or update a simulation directive (SPICE command) in the schematic.
+
+```json
+{
+  "type": "simulation.set_directive",
+  "directive": "tran",
+  "parameters": {
+    "step": "1u",
+    "stop": "10m",
+    "start": "0"
+  }
+}
+```
+
+Supported directives:
+
+- `tran` — Transient analysis (`.tran <step> <stop> [start] [max_step]`)
+- `ac` — AC analysis (`.ac <dec/oct/lin> <points> <start> <stop>`)
+- `dc` — DC sweep (`.dc <source> <start> <stop> <step>`)
+- `op` — Operating point (`.op`)
+- `options` — SPICE options (`.options key=value ...`)
+
+If a directive of the same type exists, it will be updated. Otherwise, a new text block is created.
+
+### `simulation.remove_directive`
+
+Remove a simulation directive by type.
+
+```json
+{"type": "simulation.remove_directive", "directive": "tran"}
+```
+
 ## Validation layers
 
 The backend validates plans in this order:

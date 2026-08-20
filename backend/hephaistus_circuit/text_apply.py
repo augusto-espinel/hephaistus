@@ -37,6 +37,8 @@ def compute_delta(original: Dict[str, Any], modified: Dict[str, Any]) -> Dict[st
     - added_components: New components not in original
     - removed_components: Components not in modified
     - connection_changes: Pins with changed net assignments
+    - net_changes: Net restructuring operations
+    - simulation_changes: Changes to simulation directives
     """
     # Build lookup tables
     orig_comps = {c['uuid']: c for c in original.get('components', [])}
@@ -47,7 +49,8 @@ def compute_delta(original: Dict[str, Any], modified: Dict[str, Any]) -> Dict[st
         'added_components': [],
         'removed_components': [],
         'connection_changes': [],
-        'net_changes': []
+        'net_changes': [],
+        'simulation_changes': []
     }
     
     # Find value changes and connection changes
@@ -93,6 +96,43 @@ def compute_delta(original: Dict[str, Any], modified: Dict[str, Any]) -> Dict[st
             delta['removed_components'].append({
                 'uuid': uuid,
                 'reference': orig_comp.get('reference')
+            })
+    
+    # Find simulation directive changes
+    orig_directives = {d.get('directive_type', d.get('uuid')): d for d in original.get('simulation_directives', [])}
+    mod_directives = {d.get('directive_type', d.get('uuid')): d for d in modified.get('simulation_directives', [])}
+    
+    for dtype, mod_dir in mod_directives.items():
+        if dtype in orig_directives:
+            orig_dir = orig_directives[dtype]
+            # Check for parameter changes
+            orig_params = orig_dir.get('parameters', {})
+            mod_params = mod_dir.get('parameters', {})
+            if orig_params != mod_params:
+                delta['simulation_changes'].append({
+                    'type': 'update',
+                    'directive_type': dtype,
+                    'old_parameters': orig_params,
+                    'new_parameters': mod_params,
+                    'old_text': orig_dir.get('text', ''),
+                    'new_text': mod_dir.get('text', ''),
+                })
+        else:
+            # New directive
+            delta['simulation_changes'].append({
+                'type': 'add',
+                'directive_type': dtype,
+                'text': mod_dir.get('text', ''),
+                'parameters': mod_dir.get('parameters', {}),
+            })
+    
+    for dtype, orig_dir in orig_directives.items():
+        if dtype not in mod_directives:
+            # Removed directive
+            delta['simulation_changes'].append({
+                'type': 'remove',
+                'directive_type': dtype,
+                'text': orig_dir.get('text', ''),
             })
     
     return delta
@@ -371,6 +411,222 @@ def find_wire_blocks(content: str) -> List[Tuple[int, int, str, List[Tuple[float
         wires.append((start, end, block, points))
     
     return wires
+
+
+def find_text_block(content: str, uuid: str = None, text_prefix: str = None) -> Optional[Tuple[int, int, str]]:
+    """
+    Find a text block in the schematic.
+    
+    Can search by UUID or by text prefix (e.g., ".tran" for simulation directives).
+    
+    Returns (start_pos, end_pos, block_text) or None if not found.
+    """
+    if uuid:
+        # Pattern to find text block with specific UUID
+        uuid_pattern = rf'\(text\s+[^)]*\(uuid\s+"{re.escape(uuid)}"\s*\)'
+        uuid_match = re.search(uuid_pattern, content)
+        if not uuid_match:
+            # Try alternative pattern for text with uuid at end
+            uuid_pattern = rf'\(text\s+"[^"]*"[^)]*\(uuid\s+"{re.escape(uuid)}"\s*\)'
+            uuid_match = re.search(uuid_pattern, content)
+        
+        if not uuid_match:
+            return None
+        
+        # Find the complete text block
+        start = uuid_match.start()
+        depth = 0
+        end = start
+        for i in range(start, len(content)):
+            if content[i] == '(':
+                depth += 1
+            elif content[i] == ')':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        
+        return (start, end, content[start:end])
+    
+    elif text_prefix:
+        # Pattern to find text blocks starting with specific prefix
+        # (text ".tran ..." ...) or (text ".options ..." ...)
+        prefix_escaped = re.escape(text_prefix)
+        text_pattern = rf'\(text\s+"({prefix_escaped}[^"]*)"'
+        
+        for match in re.finditer(text_pattern, content):
+            # Find the complete text block
+            start = match.start()
+            depth = 0
+            end = start
+            for i in range(start, len(content)):
+                if content[i] == '(':
+                    depth += 1
+                elif content[i] == ')':
+                    depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+            
+            return (start, end, content[start:end])
+        
+        return None
+    
+    return None
+
+
+def find_all_text_blocks_by_prefix(content: str, prefix: str) -> List[Tuple[int, int, str, str]]:
+    """
+    Find all text blocks starting with a given prefix.
+    
+    Returns list of (start_pos, end_pos, block_text, text_content).
+    """
+    blocks = []
+    prefix_escaped = re.escape(prefix)
+    text_pattern = rf'\(text\s+"({prefix_escaped}[^"]*)"'
+    
+    for match in re.finditer(text_pattern, content):
+        start = match.start()
+        depth = 0
+        end = start
+        for i in range(start, len(content)):
+            if content[i] == '(':
+                depth += 1
+            elif content[i] == ')':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        
+        text_content = match.group(1)
+        blocks.append((start, end, content[start:end], text_content))
+    
+    return blocks
+
+
+def create_text_block(text: str, x: float, y: float, angle: float = 0, 
+                       uuid_str: str = None, exclude_from_sim: bool = False) -> str:
+    """
+    Create a new text block for simulation directive.
+    
+    Returns the S-expression string for the text block.
+    """
+    if uuid_str is None:
+        uuid_str = str(uuid_module.uuid4())
+    
+    lines = [f'\t(text "{text}"']
+    lines.append(f'\t\t(exclude_from_sim {"yes" if exclude_from_sim else "no"})')
+    lines.append(f'\t\t(at {x:.3f} {y:.3f} {angle})')
+    lines.append('\t\t(effects')
+    lines.append('\t\t\t(font')
+    lines.append('\t\t\t\t(size 1.27 1.27)')
+    lines.append('\t\t\t)')
+    lines.append('\t\t)')
+    lines.append(f'\t\t(uuid "{uuid_str}")')
+    lines.append('\t)')
+    
+    return '\n'.join(lines)
+
+
+def apply_simulation_changes(content: str, changes: List[Dict[str, Any]]) -> Tuple[str, List[str]]:
+    """
+    Apply simulation directive changes using text-based editing.
+    
+    Handles:
+    - add: Create new text block with directive
+    - update: Modify existing text block
+    - remove: Delete text block
+    
+    Returns (modified_content, list_of_changes_applied).
+    """
+    changes_applied = []
+    
+    for change in changes:
+        change_type = change.get('type')
+        directive_type = change.get('directive_type', '')
+        
+        if change_type == 'add':
+            # Create new directive
+            text = change.get('text', f'.{directive_type}')
+            
+            # Find a good position for the new directive
+            # Look for existing text blocks and place after them
+            existing = find_all_text_blocks_by_prefix(content, '.')
+            
+            if existing:
+                # Place after the last existing directive
+                _, last_end, _, _ = existing[-1]
+                # Insert after the last text block
+                new_block = '\n' + create_text_block(text, 122.682, 51.816 + len(existing) * 12.7)
+                content = content[:last_end] + new_block + content[last_end:]
+            else:
+                # No existing directives - find a good insertion point
+                # Insert before the first (junction or (symbol or (wire
+                insert_patterns = [
+                    r'\n\t\(junction',
+                    r'\n\t\(symbol',
+                    r'\n\t\(wire',
+                ]
+                insert_pos = len(content)
+                for pattern in insert_patterns:
+                    match = re.search(pattern, content)
+                    if match:
+                        insert_pos = min(insert_pos, match.start())
+                
+                if insert_pos < len(content):
+                    # Insert before this position
+                    new_block = '\n' + create_text_block(text, 122.682, 51.816) + '\n'
+                    content = content[:insert_pos] + new_block + content[insert_pos:]
+                else:
+                    # Append at end before final closing paren
+                    # Find the last )
+                    last_paren = content.rfind(')')
+                    if last_paren > 0:
+                        new_block = '\n' + create_text_block(text, 122.682, 51.816) + '\n'
+                        content = content[:last_paren] + new_block + content[last_paren:]
+            
+            changes_applied.append(f"Added simulation directive: {text}")
+        
+        elif change_type == 'update':
+            # Update existing directive
+            old_text = change.get('old_text', '')
+            new_text = change.get('new_text', '')
+            
+            # Find the text block with the old directive
+            result = find_text_block(content, text_prefix=old_text.split()[0] if old_text else f'.{directive_type}')
+            
+            if result:
+                start, end, block = result
+                # Replace the text content in the block
+                # Pattern: (text "old_text" ...
+                new_block = re.sub(
+                    rf'\(text\s+"{re.escape(old_text)}"',
+                    f'(text "{new_text}"',
+                    block
+                )
+                content = content[:start] + new_block + content[end:]
+                changes_applied.append(f"Updated simulation directive: {old_text} → {new_text}")
+            else:
+                changes_applied.append(f"WARNING: Could not find directive '{old_text}' to update")
+        
+        elif change_type == 'remove':
+            # Remove directive
+            text = change.get('text', '')
+            
+            # Find the text block
+            result = find_text_block(content, text_prefix=text.split()[0] if text else f'.{directive_type}')
+            
+            if result:
+                start, end, block = result
+                # Remove the block and any surrounding whitespace
+                content = content[:start] + content[end:]
+                # Clean up any double newlines
+                content = re.sub(r'\n\s*\n\s*\n', '\n\n', content)
+                changes_applied.append(f"Removed simulation directive: {text}")
+            else:
+                changes_applied.append(f"WARNING: Could not find directive '{text}' to remove")
+    
+    return content, changes_applied
 
 
 def find_junction_blocks(content: str) -> List[Tuple[int, int, str, Tuple[float, float]]]:
@@ -1603,6 +1859,11 @@ def apply_delta_to_schematic(schematic_path: str, delta: Dict[str, Any],
                 f"Reconnect {change['reference']}.{change['pin']}: "
                 f"{change['old_net'] or '(unconnected)'} → {change['new_net']} (stub)"
             )
+        
+        # 6. Apply simulation directive changes
+        if delta.get('simulation_changes'):
+            content, sim_changes = apply_simulation_changes(content, delta['simulation_changes'])
+            changes_applied.extend(sim_changes)
         
         # Create backup before saving
         backup_path = schematic_path + '.bak'

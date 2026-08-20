@@ -1,8 +1,8 @@
 # HephAIstus Architecture
 
-Version: 2.0
-Date: 2026-08-19
-Status: Product reset baseline
+Version: 2.1
+Date: 2026-08-20
+Status: Implementation progress
 
 ## Architectural summary
 
@@ -69,9 +69,12 @@ Derived state should include:
 - labels/global/hierarchical labels;
 - power symbols;
 - sheet paths and instances;
-- library symbol references.
+- library symbol references;
+- **net coverage** — multiple disjoint stub islands per net name (labels aggregate, not last-wins).
 
 This is a runtime projection. It is not a required persisted `state.json` artifact.
+
+**Implementation note:** The parser now correctly accumulates net coverage across same-name labels, enabling multiple disjoint stub islands per net name. This was a critical fix for stub-based restructuring.
 
 ### 1.3 Patch backend
 
@@ -84,6 +87,16 @@ Responsibilities:
 - enforce preview-before-apply semantics.
 
 The backend must reject unrecognized or unsafe operations.
+
+**Implemented:** Stub-based net restructuring is fully implemented (commit `30414da`). The apply flow handles:
+
+- **Series insertions** — expressed as pin net re-assignments in JSON state (e.g., `R2.2: dc_plus → dc_plus_shunt`)
+- **Net cleanup** — when a net loses member pins, ALL wires/junctions/labels are stripped via kiutils island BFS
+- **Stub attachment** — every former member pin gets a stub carrying its NEW net name
+- **Power symbol anchoring** — power symbols anchor their nets; move attempts are rejected with warning
+- **Library embedding** — missing libId symbols are auto-embedded from installed KiCad libraries via sym-lib-table resolution
+
+Validation includes kicad-cli ERC runs confirming zero new violations against fixture baselines.
 
 ### 1.4 KiCad CLI adapter
 
@@ -115,6 +128,56 @@ Responsibilities:
 - present logs and results to the companion UI.
 
 HephAIstus should own the simulation run when it expects to answer questions about results. Reading KiCad GUI output as pixels should be a fallback, not the primary integration.
+
+**Implemented (2026-08-20):**
+
+- `hephaistus_simulation.parser` — ngspice console output, DC operating points, raw waveform parsing
+- `hephaistus_simulation.run_metadata` — simulation run tracking with schematic hash correlation
+- `hephaistus_simulation.context` — LLM context assembly from schematic + simulation
+- `hephaistus_simulation.waveform` — waveform post-processing with trend detection, settling time, overshoot calculation
+- CLI commands for parsing and context assembly
+- Test fixtures for console, op, and raw output formats
+
+**Context efficiency:**
+
+Waveforms are summarized to minimize token usage:
+- Summary stats: min, max, mean, std, initial, final
+- Trend detection: settling, oscillating, rising, falling, stable
+- Key points: final N points, initial N points, peaks, zero crossings
+- Configurable limits: max_raw_points, max_signals
+- LLM guidance for efficient simulation setup included in context
+
+### 1.6 Simulation parameter management
+
+Responsibilities:
+
+- Manage SPICE simulation directives (`.tran`, `.ac`, `.dc`, `.op`, `.options`) in KiCad schematics
+- Apply parameter changes via patch-plan operations
+- Support text-level editing to preserve KiCad formatting
+
+**Implemented (2026-08-20):**
+
+- `hephaistus_circuit.simulation_directive` — Parse and manage simulation directives
+- Patch-plan operations: `simulation.set_directive`, `simulation.remove_directive`
+- Text application: Create, update, remove text elements for directives
+- Parameter parsing: `tran`, `ac`, `dc`, `op`, `options`, `param`, `model`, `include`
+
+**Workflow:**
+
+1. LLM proposes parameter changes via patch-plan
+2. Backend validates and applies changes to schematic
+3. User triggers simulation in KiCad/ngspice
+4. Simulation results are parsed and presented to LLM
+
+**Example patch-plan:**
+
+```json
+{
+  "type": "simulation.set_directive",
+  "directive": "tran",
+  "parameters": {"step": "1u", "stop": "10m"}
+}
+```
 
 ## 2. LLM orchestration
 
@@ -290,12 +353,29 @@ This adapter should consume the same backend; it must not become a parallel muta
 - launch companion from KiCad;
 - add current-document/selection context when APIs permit.
 
-## 8. Open technical gates
+## 8. Implementation milestones
+
+### Completed
+
+- **KiCad ingestion (2026-07-18):** Extension activation, file watcher, Python/KiUtils path resolution, KiCad 10 parsing, JSON state generation. Tested with `rectifier.kicad_sch` (9 components, 5 nets).
+- **Stub-based net restructuring (2026-08-04):** Apply flow rebuilt around stubs (wire + net label). 26/26 tests passing covering: no-op, series insertion, chained splits, parallel additions, RL chain with Device:L embedding, duplicate-UUID abort. kicad-cli ERC confirms zero new violations vs fixture baseline.
+- **Simulation output parsing (2026-08-20):** Ngspice console output, DC operating points, and raw waveform parsing. Run metadata with schematic hash correlation. LLM context assembly from schematic + simulation state.
+
+### In progress
+
+- Simulation parameter management (patch-plan extension)
+- Companion chat UI
+
+### Future
+
+- Optional KiCad IPC adapter when schematic support matures
+
+## 9. Open technical gates
 
 The architecture can proceed once these gates pass:
 
-- schematic round-trip fidelity;
-- deterministic patch operation coverage;
-- fixture-level ERC integration;
+- ~~schematic round-trip fidelity~~ ✅ (validated via ERC)
+- ~~deterministic patch operation coverage~~ ✅ (stub-based operations)
+- ~~fixture-level ERC integration~~ ✅ (kicad-cli ERC runs)
 - simulation output capture;
 - safe file conflict handling.

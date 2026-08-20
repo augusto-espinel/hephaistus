@@ -1,8 +1,8 @@
 # HephAIstus Product Specification
 
-Version: 2.0
-Date: 2026-08-19
-Status: Product reset baseline
+Version: 2.1
+Date: 2026-08-20
+Status: Implementation progress
 
 ## 1. Scope
 
@@ -122,14 +122,17 @@ The orchestration layer must reject plans that cannot be mapped to deterministic
 
 ## 6. Schematic mutation policy
 
-The backend must prefer the established **stub-based restructuring** semantics:
+The backend uses **stub-based restructuring** semantics (implemented 2026-08-04):
 
-- split nets by changing pin/net assignments;
-- strip affected net media when a net loses member pins;
-- attach stubs carrying the new net names;
-- preserve user geometry where possible;
-- preserve UUIDs, instances, and symbol metadata;
-- reject unsafe power-symbol moves unless explicitly validated.
+- **Series insertions** are expressed as pin net re-assignments (e.g., `R2.2: dc_plus → dc_plus_shunt`)
+- **Net cleanup** — when a net loses member pins, ALL wires/junctions/labels are stripped via kiutils island BFS
+- **Stub attachment** — every former member pin gets a stub (wire + net label) carrying its NEW net name
+- **Power symbols** anchor their nets; move attempts are rejected with warning
+- **Library embedding** — missing libId symbols are auto-embedded from installed KiCad libraries via sym-lib-table resolution
+- **UUID preservation** — instances and pin UUIDs are preserved; new components emit proper `(pin N (uuid ...))` and `(instances ...)` blocks
+- **Net coverage** — multiple disjoint stub islands per net name are supported (labels aggregate, not last-wins)
+
+This approach preserves user geometry where possible and avoids physical wire-breaking operations.
 
 ## 7. Validation gates
 
@@ -182,6 +185,18 @@ Preferred near-term interfaces:
 - PySide/Qt or local web UI for the companion window;
 - KiCad IPC/plugin as a future enhancement once schematic support is appropriate.
 
-## 11. Acceptance criteria
+## 11. Implementation status
+
+### Completed
+
+- **KiCad ingestion (2026-07-18):** Extension activation, file watcher, Python/KiUtils path resolution, KiCad 10 parsing, JSON state generation.
+- **Stub-based net restructuring (2026-08-04):** Full apply flow with 26/26 tests passing. Operations include: no-op, series insertion, chained splits, parallel additions, component embedding (Device:L), and duplicate-UUID abort. kicad-cli ERC validates zero new violations vs fixture baseline.
+
+### In progress
+
+- Simulation context pipeline
+- Companion chat UI
+
+## 12. Acceptance criteria
 
 A milestone is complete only when it can answer questions or execute changes against retained fixture projects without manual copy/paste of schematic files, console output, or simulation result metadata.
