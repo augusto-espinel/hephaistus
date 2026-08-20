@@ -11,7 +11,7 @@ export function Layout() {
         </div>
         <nav className="nav">
           <NavLink to="/" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
-            Schematic
+            Chat
           </NavLink>
           <NavLink to="/context" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
             Context

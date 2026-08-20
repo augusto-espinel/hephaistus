@@ -580,6 +580,279 @@ button.modify {
   font-style: italic;
 }
 
+/* Session Status */
+.session-status {
+  background: var(--bg-secondary);
+  padding: 1rem;
+  border-radius: 8px;
+  margin-bottom: 1.5rem;
+  display: flex;
+  gap: 2rem;
+}
+
+.session-status.loading {
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.status-section {
+  flex: 1;
+}
+
+.status-section h4 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot.current {
+  background: var(--success);
+}
+
+.status-dot.stale {
+  background: var(--warning);
+}
+
+.status-dot.none {
+  background: var(--text-muted);
+}
+
+.status-dot.pulse {
+  background: var(--accent);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.status-label {
+  font-size: 0.9rem;
+}
+
+.status-badge {
+  padding: 0.125rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.status-badge.saved {
+  background: rgba(76, 175, 80, 0.2);
+  color: var(--success);
+}
+
+.status-badge.unsaved {
+  background: rgba(255, 152, 0, 0.2);
+  color: var(--warning);
+}
+
+.status-badge.info {
+  background: rgba(33, 150, 243, 0.2);
+  color: var(--info);
+}
+
+.status-details {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.status-warning {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: rgba(255, 152, 0, 0.1);
+  border-radius: 4px;
+  font-size: 0.8rem;
+  color: var(--warning);
+}
+
+.workflow-steps {
+  list-style: none;
+  counter-reset: step;
+}
+
+.workflow-steps li {
+  counter-increment: step;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.workflow-steps li::before {
+  content: counter(step);
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  font-size: 0.7rem;
+}
+
+.workflow-steps li.complete {
+  color: var(--success);
+}
+
+.workflow-steps li.complete::before {
+  background: var(--success);
+  color: var(--bg-primary);
+}
+
+.workflow-steps li.active::before {
+  background: var(--accent);
+  color: var(--bg-primary);
+}
+
+/* Chat Page */
+.chat-page {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 120px);
+}
+
+.guard-panel {
+  margin-bottom: 1rem;
+}
+
+.guard-warning {
+  display: flex;
+  gap: 1rem;
+  padding: 1rem;
+  background: rgba(255, 152, 0, 0.1);
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+}
+
+.guard-icon {
+  font-size: 1.5rem;
+}
+
+.guard-message {
+  flex: 1;
+}
+
+.guard-message strong {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.guard-message p {
+  margin: 0.5rem 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.guard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.guard-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.guard-status {
+  font-size: 1.25rem;
+}
+
+.guard-status.stale {
+  color: var(--warning);
+}
+
+.guard-status.current {
+  color: var(--success);
+}
+
+.chat-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.chat-messages {
+  flex: 1;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.chat-messages .empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+}
+
+.chat-messages .message {
+  margin-bottom: 1rem;
+}
+
+.chat-messages .message-content {
+  padding: 1rem;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  white-space: pre-wrap;
+}
+
+.chat-input {
+  display: flex;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.chat-input textarea {
+  flex: 1;
+  padding: 0.75rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  resize: none;
+}
+
+.chat-input textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.chat-input textarea:disabled {
+  opacity: 0.5;
+}
+
+.chat-input button {
+  padding: 0.75rem 1.5rem;
+}
+
 /* Empty State */
 .empty-state {
   padding: 2rem;

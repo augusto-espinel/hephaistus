@@ -7,6 +7,16 @@ export interface SchematicState {
   nets: Net[]
   directives: Directive[]
   last_modified: string | null
+  has_unsaved_changes: boolean
+}
+
+export interface SimulationState {
+  status: 'current' | 'stale' | 'none'
+  last_run_id: string | null
+  last_run_timestamp: string | null
+  analysis_type: string | null
+  converged: boolean | null
+  staleness_warning: string | null
 }
 
 export interface Component {
