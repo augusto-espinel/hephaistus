@@ -4,10 +4,11 @@ import type { SessionStatusResponse } from '@/hooks/useSessionStatus'
 interface SessionStatusProps {
   data: SessionStatusResponse | null
   loading?: boolean
+  onLoadSchematic?: () => void
   onImportSimulation?: () => void
 }
 
-export function SessionStatus({ data, loading, onImportSimulation }: SessionStatusProps) {
+export function SessionStatus({ data, loading, onLoadSchematic, onImportSimulation }: SessionStatusProps) {
   const [showLibraries, setShowLibraries] = useState(false)
 
   if (loading) {
@@ -23,7 +24,12 @@ export function SessionStatus({ data, loading, onImportSimulation }: SessionStat
     return (
       <div className="session-status empty">
         <p>No schematic loaded</p>
-        <p className="hint">Open a KiCad schematic in KiCad to begin</p>
+        <p className="hint">Open a KiCad schematic to begin</p>
+        {onLoadSchematic && (
+          <button className="load-button" onClick={onLoadSchematic}>
+            Load Schematic
+          </button>
+        )}
       </div>
     )
   }

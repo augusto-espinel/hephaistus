@@ -885,6 +885,11 @@ button.modify {
   margin-top: 0.25rem;
 }
 
+.session-status.empty .load-button {
+  margin-top: 1rem;
+  padding: 0.5rem 1.5rem;
+}
+
 .status-section .import-button {
   margin-top: 0.75rem;
   padding: 0.5rem 1rem;

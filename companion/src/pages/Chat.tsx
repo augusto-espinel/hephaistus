@@ -2,12 +2,15 @@ import { useState } from 'react'
 import { useSessionStatus } from '@/hooks/useSessionStatus'
 import { useSimulationState, useSimulationImport } from '@/hooks/useSimulation'
 import { useLLM } from '@/hooks/useLLM'
+import { useSchematic } from '@/hooks/useSchematic'
 import { SessionStatus } from '@/components/SessionStatus'
 import { ImportSimulationDialog } from '@/components/ImportSimulationDialog'
+import { LoadSchematicDialog } from '@/components/LoadSchematicDialog'
 
 export function Chat() {
   const [request, setRequest] = useState('')
   const [showImportDialog, setShowImportDialog] = useState(false)
+  const [showLoadDialog, setShowLoadDialog] = useState(false)
   
   // Session status (includes schematic + SPICE libraries)
   const { 
@@ -34,6 +37,13 @@ export function Chat() {
     error: importError, 
     importSimulation 
   } = useSimulationImport()
+  
+  // Schematic load
+  const {
+    loading: loadLoading,
+    error: loadError,
+    load: loadSchematic
+  } = useSchematic()
 
   // Pre-prompt guard status
   const hasSession = sessionData?.has_session ?? false
@@ -58,6 +68,11 @@ export function Chat() {
     refreshSimState()
   }
 
+  const handleLoadSchematic = async (path: string) => {
+    await loadSchematic(path)
+    refreshSession()
+  }
+
   return (
     <div className="chat-page">
       <div className="page-header">
@@ -70,6 +85,7 @@ export function Chat() {
       <SessionStatus 
         data={sessionData}
         loading={sessionLoading}
+        onLoadSchematic={() => setShowLoadDialog(true)}
         onImportSimulation={() => setShowImportDialog(true)}
       />
 
@@ -158,6 +174,14 @@ export function Chat() {
         onImport={handleImportSimulation}
         loading={importLoading}
         error={importError}
+      />
+
+      <LoadSchematicDialog
+        isOpen={showLoadDialog}
+        onClose={() => setShowLoadDialog(false)}
+        onLoad={handleLoadSchematic}
+        loading={loadLoading}
+        error={loadError}
       />
     </div>
   )
