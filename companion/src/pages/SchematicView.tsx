@@ -1,8 +1,8 @@
-import { useApi } from '@/hooks/useApi'
+import { useFetch } from '@/hooks/useFetch'
 import type { SchematicState } from '@/services/schematic'
 
 export function SchematicView() {
-  const { data, loading, error } = useApi<SchematicState>('/api/schematic/state')
+  const { data, loading, error } = useFetch<SchematicState>('/api/schematic/state')
 
   return (
     <div className="schematic-view">

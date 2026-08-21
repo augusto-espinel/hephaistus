@@ -1,6 +1,6 @@
 export interface SchematicState {
-  path: string
-  hash: string
+  path: string | null
+  hash: string | null
   component_count: number
   net_count: number
   components: Component[]
@@ -18,6 +18,10 @@ export interface SimulationState {
   converged: boolean | null
   staleness_warning: string | null
 }
+
+// Re-export from hooks for backward compatibility
+export type { SpiceLibraryInfo, SchematicInfo, SessionStatusResponse } from '@/hooks/useSessionStatus'
+export type { SimulationImportRequest, SimulationImportResponse } from '@/hooks/useSimulation'
 
 export interface Component {
   reference: string

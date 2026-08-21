@@ -3,7 +3,7 @@ export interface ContextAssemblyResult {
   assembled_at: string
   total_tokens: number
   budget_summary: BudgetSummary | null
-  layers: Record<string, LayerInfo>
+  layers: Record<string, string>
   prompt: string
 }
 

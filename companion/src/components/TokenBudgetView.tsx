@@ -1,7 +1,7 @@
-import type { TokenBudget } from '@/services/context'
+import type { BudgetSummary } from '@/services/context'
 
 interface TokenBudgetViewProps {
-  budget: TokenBudget | null
+  budget: BudgetSummary | null
   totalTokens: number
 }
 
@@ -9,8 +9,8 @@ export function TokenBudgetView({ budget, totalTokens }: TokenBudgetViewProps) {
   if (!budget) return null
 
   const layers = budget.layers || []
-  const utilization = budget.total_context_budget > 0 
-    ? (totalTokens / budget.total_context_budget) * 100 
+  const utilization = budget.total_budget > 0 
+    ? (totalTokens / budget.total_budget) * 100 
     : 0
 
   return (
@@ -22,28 +22,33 @@ export function TokenBudgetView({ budget, totalTokens }: TokenBudgetViewProps) {
       </div>
       
       <div className="layer-bars">
-        {layers.map((layer) => (
-          <div key={layer.layer} className="layer-bar">
-            <div className="layer-info">
-              <span className="layer-name">{layer.layer}</span>
-              <span className="layer-tokens">
-                {layer.tokens.toLocaleString()} / {layer.max_tokens.toLocaleString()}
-              </span>
+        {layers.map((layer) => {
+          const layerUtilization = layer.max_tokens > 0 
+            ? (layer.tokens / layer.max_tokens) 
+            : 0
+          return (
+            <div key={layer.layer} className="layer-bar">
+              <div className="layer-info">
+                <span className="layer-name">{layer.layer}</span>
+                <span className="layer-tokens">
+                  {layer.tokens.toLocaleString()} / {layer.max_tokens.toLocaleString()}
+                </span>
+              </div>
+              <div className="bar-container">
+                <div 
+                  className={`bar ${layer.truncated ? 'truncated' : ''}`}
+                  style={{ 
+                    width: `${layerUtilization * 100}%`,
+                    backgroundColor: getLayerColor(layer.layer),
+                  }}
+                />
+              </div>
+              {layer.truncated && (
+                <span className="truncated-badge">truncated</span>
+              )}
             </div>
-            <div className="bar-container">
-              <div 
-                className={`bar ${layer.truncated ? 'truncated' : ''}`}
-                style={{ 
-                  width: `${layer.utilization * 100}%`,
-                  backgroundColor: getLayerColor(layer.layer),
-                }}
-              />
-            </div>
-            {layer.truncated && (
-              <span className="truncated-badge">truncated</span>
-            )}
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )

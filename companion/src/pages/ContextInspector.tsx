@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useApi } from '@/hooks/useApi'
 import { ContextView } from '@/components/ContextView'
 import { TokenBudgetView } from '@/components/TokenBudgetView'
@@ -62,8 +62,8 @@ export function ContextInspector() {
 
       {data && (
         <div className="result-panel">
-          <TokenBudgetView budget={data.budget} totalTokens={data.total_tokens} />
-          <ContextView layers={data.layer_contents} />
+          <TokenBudgetView budget={data.budget_summary} totalTokens={data.total_tokens} />
+          <ContextView layers={data.layers} />
         </div>
       )}
     </div>

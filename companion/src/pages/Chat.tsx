@@ -1,28 +1,61 @@
 import { useState } from 'react'
-import { useApi } from '@/hooks/useApi'
-import type { SchematicState, SimulationState } from '@/services/schematic'
+import { useSessionStatus } from '@/hooks/useSessionStatus'
+import { useSimulationState, useSimulationImport } from '@/hooks/useSimulation'
+import { useLLM } from '@/hooks/useLLM'
 import { SessionStatus } from '@/components/SessionStatus'
+import { ImportSimulationDialog } from '@/components/ImportSimulationDialog'
 
 export function Chat() {
   const [request, setRequest] = useState('')
-  const { data: schematicData, loading: schematicLoading } = useApi<SchematicState>('/api/schematic/state')
-  const { data: simData, loading: simLoading } = useApi<SimulationState>('/api/simulation/state')
-  const { data, loading, error, execute } = useApi<{ response: string }>()
+  const [showImportDialog, setShowImportDialog] = useState(false)
   
+  // Session status (includes schematic + SPICE libraries)
+  const { 
+    data: sessionData, 
+    loading: sessionLoading, 
+    error: sessionError,
+    refresh: refreshSession 
+  } = useSessionStatus()
+  
+  // Simulation state (for import button visibility)
+  const { refresh: refreshSimState } = useSimulationState()
+  
+  // LLM generation
+  const { 
+    data: llmData, 
+    loading: llmLoading, 
+    error: llmError, 
+    generate 
+  } = useLLM()
+  
+  // Simulation import
+  const { 
+    loading: importLoading, 
+    error: importError, 
+    importSimulation 
+  } = useSimulationImport()
+
   // Pre-prompt guard status
-  const schematicSaved = !schematicData?.has_unsaved_changes
-  const simulationCurrent = simData?.status === 'current'
-  const canPrompt = schematicSaved
-  
+  const hasSession = sessionData?.has_session ?? false
+  const canPrompt = hasSession
+
   const handleSubmit = async () => {
-    if (!canPrompt) {
-      return
-    }
-    await execute('/api/llm/generate', {
-      method: 'POST',
-      body: JSON.stringify({ request }),
+    if (!canPrompt || !request.trim()) return
+
+    await generate({
+      request: request.trim(),
+      provider: 'ollama', // Default to local
     })
-    setRequest('')
+  }
+
+  const handleImportSimulation = async (csvPath: string | null, consoleText: string | null) => {
+    await importSimulation({
+      csv_path: csvPath,
+      console_text: consoleText,
+    })
+    // Refresh both session and simulation state
+    refreshSession()
+    refreshSimState()
   }
 
   return (
@@ -35,33 +68,27 @@ export function Chat() {
       </div>
 
       <SessionStatus 
-        schematic={schematicData} 
-        simulation={simData}
-        loading={schematicLoading || simLoading}
+        data={sessionData}
+        loading={sessionLoading}
+        onImportSimulation={() => setShowImportDialog(true)}
       />
 
-      {!canPrompt && (
+      {sessionError && (
+        <div className="error-banner">
+          <span className="error-icon">⚠️</span>
+          <span>Session error: {sessionError}</span>
+        </div>
+      )}
+
+      {!hasSession && !sessionLoading && (
         <div className="guard-panel">
           <div className="guard-warning">
-            <span className="guard-icon">⚠️</span>
+            <span className="guard-icon">📋</span>
             <div className="guard-message">
-              <strong>Save required before prompting</strong>
+              <strong>No schematic loaded</strong>
               <p>
-                {schematicSaved ? '' : 'Save your schematic in KiCad first. '}
-                {simulationCurrent ? '' : 'Run simulation for fresh context (optional but recommended).'}
+                Open a KiCad schematic to begin. Save it in KiCad to make it available.
               </p>
-              <div className="guard-actions">
-                {!schematicSaved && (
-                  <span className="guard-item">
-                    <span className="guard-status stale">●</span> Schematic has unsaved changes
-                  </span>
-                )}
-                {!simulationCurrent && simData?.status !== 'none' && (
-                  <span className="guard-item">
-                    <span className="guard-status stale">●</span> Simulation is stale
-                  </span>
-                )}
-              </div>
             </div>
           </div>
         </div>
@@ -69,16 +96,25 @@ export function Chat() {
 
       <div className="chat-container">
         <div className="chat-messages">
-          {data?.response && (
+          {llmData?.raw_response && (
             <div className="message assistant">
               <div className="message-content">
-                {data.response}
+                {llmData.raw_response}
               </div>
+              {llmData.patch_plan && (
+                <div className="patch-plan-preview">
+                  <h4>Proposed Changes:</h4>
+                  <pre>{JSON.stringify(llmData.patch_plan, null, 2)}</pre>
+                </div>
+              )}
             </div>
           )}
-          {!data && !loading && (
+          {!llmData && !llmLoading && hasSession && (
             <div className="empty-state">
               <p>No conversation yet. Describe a change you'd like to make.</p>
+              <p className="hint">
+                Example: "Add a snubber circuit across D1 to suppress voltage spikes"
+              </p>
             </div>
           )}
         </div>
@@ -87,25 +123,42 @@ export function Chat() {
           <textarea
             value={request}
             onChange={(e) => setRequest(e.target.value)}
-            placeholder="e.g., Add a snubber circuit across D1 to suppress voltage spikes"
+            placeholder={
+              hasSession 
+                ? "e.g., Add a snubber circuit across D1 to suppress voltage spikes"
+                : "Open a schematic first..."
+            }
             rows={3}
             disabled={!canPrompt}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                handleSubmit()
+              }
+            }}
           />
           <button 
             onClick={handleSubmit} 
-            disabled={!canPrompt || loading || !request.trim()}
+            disabled={!canPrompt || llmLoading || !request.trim()}
           >
-            {loading ? 'Thinking...' : 'Send'}
+            {llmLoading ? 'Thinking...' : 'Send'}
           </button>
         </div>
+
+        {llmError && (
+          <div className="error-panel">
+            <span className="error-icon">⚠️</span>
+            <span>{llmError}</span>
+          </div>
+        )}
       </div>
 
-      {error && (
-        <div className="error-panel">
-          <span className="error-icon">⚠️</span>
-          <span>{error}</span>
-        </div>
-      )}
+      <ImportSimulationDialog
+        isOpen={showImportDialog}
+        onClose={() => setShowImportDialog(false)}
+        onImport={handleImportSimulation}
+        loading={importLoading}
+        error={importError}
+      />
     </div>
   )
 }
