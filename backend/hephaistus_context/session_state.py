@@ -85,12 +85,44 @@ class UserDirectives:
 
 
 @dataclass
+class ProjectPaths:
+    """Standard paths within a KiCad project for HephAIstus data."""
+    
+    session_file: str = "session.json"
+    history_db: str = "history.db"
+    simulations_dir: str = "simulations"
+    
+    @classmethod
+    def hephaistus_dir(cls, project_root: str) -> Path:
+        """Get the .hephaistus directory for a project."""
+        return Path(project_root) / ".hephaistus"
+    
+    @classmethod
+    def session_path(cls, project_root: str) -> Path:
+        """Get the session.json path for a project."""
+        return cls.hephaistus_dir(project_root) / cls.session_file
+    
+    @classmethod
+    def history_path(cls, project_root: str) -> Path:
+        """Get the history.db path for a project."""
+        return cls.hephaistus_dir(project_root) / cls.history_db
+    
+    @classmethod
+    def simulations_path(cls, project_root: str) -> Path:
+        """Get the simulations directory for a project."""
+        return cls.hephaistus_dir(project_root) / cls.simulations_dir
+
+
+@dataclass
 class SchematicState:
     """Current state of the schematic."""
     
     path: str = ""
     hash: str = ""
     last_modified: Optional[datetime] = None
+    
+    # Project-relative path from project root to schematic
+    relative_path: str = ""
     component_count: int = 0
     net_count: int = 0
     components: List[Dict[str, Any]] = field(default_factory=list)
@@ -130,6 +162,9 @@ class SimulationState:
     analysis_type: Optional[str] = None
     converged: Optional[bool] = None
     staleness_warning: Optional[str] = None
+    
+    # Schematic hash when simulation was run (for staleness detection)
+    schematic_hash: Optional[str] = None
     
     # Summary data (always available)
     op_points: List[Dict[str, Any]] = field(default_factory=list)
@@ -171,24 +206,56 @@ class SimulationState:
 
 
 @dataclass
+class SpiceLibraryInfo:
+    """Information about a loaded SPICE library."""
+    
+    name: str = ""
+    path: str = ""
+    content: str = ""  # Full content with comments stripped
+    models: List[str] = field(default_factory=list)
+    subcircuits: List[str] = field(default_factory=list)
+    token_estimate: int = 0
+    
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "path": self.path,
+            "models": self.models,
+            "subcircuits": self.subcircuits,
+            "token_estimate": self.token_estimate,
+        }
+
+
+@dataclass
 class SessionState:
     """
     Complete session state combining schematic, simulation, and user directives.
     
     This is the single source of truth for Layer 1 context.
+    Session data is stored project-relative in .hephaistus/session.json.
     """
     
     session_id: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_updated: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
+    # Project root (directory containing .kicad_pro or parent of .kicad_sch)
+    project_root: str = ""
+    
     schematic: SchematicState = field(default_factory=SchematicState)
     simulation: SimulationState = field(default_factory=SimulationState)
     directives: UserDirectives = field(default_factory=UserDirectives)
     
+    # SPICE libraries referenced by schematic
+    spice_libraries: List[SpiceLibraryInfo] = field(default_factory=list)
+    
     # Pending changes
     pending_patch_plan: Optional[Dict[str, Any]] = None
     pending_validation: Optional[Dict[str, Any]] = None
+    
+    def get_project_paths(self) -> ProjectPaths:
+        """Get project-relative paths for this session."""
+        return ProjectPaths()
     
     def refresh_schematic(self, schematic_path: str, parsed_state: Optional[Dict] = None) -> None:
         """
@@ -202,6 +269,7 @@ class SessionState:
         self.schematic.last_modified = datetime.now(timezone.utc)
         
         if parsed_state:
+            old_hash = self.schematic.hash
             self.schematic.hash = self.schematic.compute_hash()
             self.schematic.components = parsed_state.get("components", [])
             self.schematic.nets = parsed_state.get("nets", [])
@@ -210,8 +278,12 @@ class SessionState:
             self.schematic.net_count = len(self.schematic.nets)
             
             # Check if simulation is now stale
+            # Compare current schematic hash with simulation's stored hash
             if self.simulation.status == SimulationStatus.CURRENT:
-                self.simulation.mark_stale()
+                if self.simulation.schematic_hash and self.simulation.schematic_hash != self.schematic.hash:
+                    self.simulation.mark_stale(
+                        f"Schematic modified after last simulation (hash changed: {self.simulation.schematic_hash[:8]} → {self.schematic.hash[:8]})"
+                    )
         
         self.last_updated = datetime.now(timezone.utc)
     

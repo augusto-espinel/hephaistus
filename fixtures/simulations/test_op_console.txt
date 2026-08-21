@@ -1,0 +1,16 @@
+Circuit: * rectifier_bridge
+Doing analysis at TEMP = 27.000000
+
+Reference   Value      Power     
+----------------------------
+V1          12V        0.144W   
+R1          1k         0.0W     
+
+Operating point information:
+-----------------------------
+V(out) = 12.000000
+I(R1) = 0.012000
+I(V1) = -0.012000
+
+No errors detected.
+Analysis completed successfully.

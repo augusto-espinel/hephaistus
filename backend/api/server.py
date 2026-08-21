@@ -6,9 +6,14 @@ for the React companion UI.
 """
 
 import os
+import uuid
 from pathlib import Path
+
+# Load environment variables from .env file (for development)
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent.parent.parent / ".env")
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +28,9 @@ from hephaistus_context import (
     SimulationStatus,
 )
 from hephaistus_circuit import parse_schematic
+from hephaistus_circuit.spice_library import load_libraries_for_schematic
+from hephaistus_simulation.ingestion import ingest_simulation, to_run_metadata
+from hephaistus_simulation.archiver import SimulationArchive
 from hephaistus_llm import LLMOrchestrator, ProviderConfig
 
 
@@ -46,8 +54,51 @@ app.add_middleware(
 _context_service: Optional[ContextService] = None
 _history_store: Optional[HistoryStore] = None
 _session_persistence: Optional[SessionPersistence] = None
-_current_schematic: Optional[Path] = None
-_schematic_hash: Optional[str] = None
+_project_root: Optional[Path] = None
+
+
+def _init_persistence(project_root: str) -> SessionPersistence:
+    """Initialize persistence for a project."""
+    global _session_persistence, _history_store, _project_root
+    
+    _project_root = Path(project_root)
+    _session_persistence = SessionPersistence(project_root)
+    _history_store = HistoryStore(db_path=str(_project_root / ".hephaistus" / "history.db"))
+    
+    return _session_persistence
+
+
+def _restore_session() -> Optional[str]:
+    """Restore session from disk if it exists. Returns schematic path or None."""
+    global _context_service, _session_persistence, _project_root
+    
+    if not _session_persistence or not _session_persistence.has_session():
+        return None
+    
+    try:
+        session = _session_persistence.load_session()
+        if session and session.schematic.path:
+            # Restore context service with loaded session
+            _context_service = ContextService()
+            _context_service.session = session
+            return session.schematic.path
+    except Exception as e:
+        print(f"Warning: Failed to restore session: {e}")
+    
+    return None
+
+
+def _save_session() -> None:
+    """Save current session to disk."""
+    global _context_service, _session_persistence
+    
+    if not _context_service or not _session_persistence:
+        return
+    
+    try:
+        _session_persistence.save_session(_context_service.session)
+    except Exception as e:
+        print(f"Warning: Failed to save session: {e}")
 
 
 # Request/Response Models
@@ -121,9 +172,10 @@ def get_context_service() -> ContextService:
 
 
 def get_history_store() -> HistoryStore:
-    """Get or create the global history store."""
+    """Get the project-scoped history store."""
     global _history_store
     if _history_store is None:
+        # Fallback to in-memory if no project loaded
         _history_store = HistoryStore()
     return _history_store
 
@@ -136,6 +188,115 @@ async def root():
     return {"status": "ok", "service": "hephaistus-companion-api"}
 
 
+@app.get("/api/session/status")
+async def get_session_status():
+    """
+    Get current session status.
+    
+    Returns project root, schematic info, and whether a session is loaded.
+    """
+    service = get_context_service()
+    session = service.session
+    
+    return {
+        "has_session": bool(session.schematic.path),
+        "session_id": session.session_id,
+        "project_root": session.project_root or None,
+        "schematic": {
+            "path": session.schematic.path or None,
+            "relative_path": session.schematic.relative_path or None,
+            "hash": session.schematic.hash or None,
+            "component_count": session.schematic.component_count,
+            "net_count": session.schematic.net_count,
+        },
+        "simulation": {
+            "status": session.simulation.status.value,
+            "last_run": session.simulation.last_run_id,
+        },
+        "spice_libraries": [
+            {
+                "name": lib.name,
+                "models": lib.models,
+                "subcircuits": lib.subcircuits,
+                "token_estimate": lib.token_estimate,
+            }
+            for lib in session.spice_libraries
+        ],
+        "last_updated": session.last_updated.isoformat() if session.last_updated else None,
+    }
+
+
+@app.post("/api/session/restore")
+async def restore_session(project_path: Optional[str] = None):
+    """
+    Restore a saved session.
+    
+    If project_path is provided, restore that project's session.
+    Otherwise, try to restore the most recent session.
+    
+    Returns the restored schematic path or null if no session exists.
+    """
+    global _session_persistence, _project_root
+    
+    # If project_path provided, initialize persistence for it
+    if project_path:
+        _init_persistence(project_path)
+    
+    # If no persistence initialized, try to find the most recent session
+    if not _session_persistence:
+        # Look for recent sessions in common locations
+        # This is a heuristic - in production, we'd track recently used projects
+        home = Path.home()
+        recent_session = None
+        recent_time = 0
+        
+        # Search in common KiCad project locations
+        search_paths = [
+            home / "Documents" / "KiCad" / "Projects",
+            home / "KiCad" / "Projects",
+        ]
+        
+        for search_dir in search_paths:
+            if not search_dir.exists():
+                continue
+            for session_file in search_dir.rglob(".hephaistus/session.json"):
+                try:
+                    mtime = session_file.stat().st_mtime
+                    if mtime > recent_time:
+                        recent_time = mtime
+                        recent_session = session_file
+                except:
+                    continue
+        
+        if recent_session:
+            # Found a session file - initialize from its project
+            project_root = str(recent_session.parent.parent)
+            _init_persistence(project_root)
+        else:
+            return {
+                "status": "no_session",
+                "schematic_path": None,
+                "message": "No saved sessions found. Load a schematic first.",
+            }
+    
+    restored_path = _restore_session()
+    
+    if restored_path:
+        service = get_context_service()
+        return {
+            "status": "restored",
+            "schematic_path": restored_path,
+            "project_root": service.session.project_root,
+            "components": service.session.schematic.component_count,
+            "nets": service.session.schematic.net_count,
+        }
+    else:
+        return {
+            "status": "no_session",
+            "schematic_path": None,
+        }
+
+
 @app.get("/api/schematic/state", response_model=SchematicStateResponse)
 async def get_schematic_state():
     """
@@ -143,23 +304,18 @@ async def get_schematic_state():
     
     Returns component/net counts, directives, and unsaved status.
     """
-    global _current_schematic, _schematic_hash
-    
     service = get_context_service()
     session = service.session
     
     # Check if schematic file still exists and hasn't changed
     has_unsaved = False
-    if _current_schematic and _current_schematic.exists():
-        current_hash = service.session.schematic.compute_hash()
-        if _schematic_hash and current_hash != _schematic_hash:
+    schematic_path = Path(session.schematic.path) if session.schematic.path else None
+    if schematic_path and schematic_path.exists():
+        current_hash = session.schematic.compute_hash()
+        if session.schematic.hash and current_hash != session.schematic.hash:
             # File was modified externally (e.g., saved in KiCad)
-            _schematic_hash = current_hash
             has_unsaved = False
-        elif session.schematic.path:
-            # Session has schematic but we need to check if KiCad saved it
-            # For now, we assume file is saved (user workflow responsibility)
-            has_unsaved = False
+        # For now, we assume file is saved (user workflow responsibility)
     else:
         has_unsaved = bool(session.schematic.path and not session.schematic.hash)
     
@@ -181,17 +337,32 @@ async def load_schematic(path: str):
     """
     Load a schematic file.
     
-    Parses the .kicad_sch file and updates session state.
+    Parses the .kicad_sch file, discovers project root, and updates session state.
+    Session is persisted to .hephaistus/session.json in the project directory.
     """
-    global _current_schematic, _schematic_hash
-    
     schematic_path = Path(path)
     if not schematic_path.exists():
         raise HTTPException(status_code=404, detail=f"Schematic not found: {path}")
     
     try:
+        # Discover project root from schematic path
+        persistence = SessionPersistence()
+        project_root = persistence.discover_project_root(str(schematic_path))
+        
+        # Initialize project-scoped persistence
+        _init_persistence(project_root)
+        
+        # Try to restore existing session for this project
+        restored_path = _restore_session()
+        
         # Parse schematic
         parsed = parse_schematic(str(schematic_path))
+        
+        # Calculate relative path from project root
+        try:
+            relative_path = str(schematic_path.relative_to(project_root))
+        except ValueError:
+            relative_path = schematic_path.name
         
         # Update context service
         service = get_context_service()
@@ -200,15 +371,42 @@ async def load_schematic(path: str):
             parsed_state=parsed,
         )
         
-        # Track for unsaved changes detection
-        _current_schematic = schematic_path
-        _schematic_hash = service.session.schematic.hash
+        # Update session with project-relative info
+        service.session.project_root = project_root
+        service.session.schematic.relative_path = relative_path
+        
+        # Load SPICE libraries referenced in schematic
+        if parsed and "spice_libraries" in parsed:
+            lib_context = load_libraries_for_schematic(
+                str(schematic_path),
+                search_paths=None,
+            )
+            
+            # Convert to SpiceLibraryInfo objects
+            from hephaistus_context.session_state import SpiceLibraryInfo
+            service.session.spice_libraries = [
+                SpiceLibraryInfo(
+                    name=lib.name,
+                    path=lib.path,
+                    content=lib.content,
+                    models=lib.models,
+                    subcircuits=lib.subcircuits,
+                    token_estimate=lib.token_estimate,
+                )
+                for lib in lib_context.libraries
+            ]
+        
+        # Save session to disk
+        _save_session()
         
         return {
             "status": "loaded",
             "path": str(schematic_path),
+            "project_root": project_root,
+            "relative_path": relative_path,
             "components": service.session.schematic.component_count,
             "nets": service.session.schematic.net_count,
+            "session_file": str(_project_root / ".hephaistus" / "session.json") if _project_root else None,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to parse schematic: {str(e)}")
@@ -234,6 +432,148 @@ async def get_simulation_state():
     )
 
 
+class SimulationLoadRequest(BaseModel):
+    path: Optional[str] = None  # Path to simulation results directory or file
+    analysis_type: Optional[str] = None  # "tran", "ac", "dc", "op"
+    converged: Optional[bool] = None
+    op_points: Optional[List[dict]] = None
+    signal_summaries: Optional[List[dict]] = None
+    warnings: Optional[List[str]] = None
+    errors: Optional[List[str]] = None
+
+
+@app.post("/api/simulation/load")
+async def load_simulation(request: SimulationLoadRequest):
+    """
+    Load simulation results into session context.
+    
+    Can either:
+    1. Auto-discover from .hephaistus/simulations/ (if path not provided)
+    2. Load from specified path
+    3. Accept manual results (op_points, signal_summaries)
+    
+    This allows the LLM to see simulation results for analysis.
+    """
+    global _project_root, _session_persistence
+    
+    if not _project_root:
+        raise HTTPException(status_code=400, detail="No project loaded. Load a schematic first.")
+    
+    service = get_context_service()
+    
+    # If path provided, try to parse simulation files
+    if request.path:
+        # TODO: Implement simulation file parsing
+        # For now, just record that simulation was loaded
+        pass
+    
+    # Update simulation state
+    if request.analysis_type:
+        service.session.simulation.analysis_type = request.analysis_type
+    if request.converged is not None:
+        service.session.simulation.converged = request.converged
+    if request.op_points is not None:
+        service.session.simulation.op_points = request.op_points
+    if request.signal_summaries is not None:
+        service.session.simulation.signal_summaries = request.signal_summaries
+    if request.warnings is not None:
+        service.session.simulation.warnings = request.warnings
+    if request.errors is not None:
+        service.session.simulation.errors = request.errors
+    
+    # Mark as current
+    service.session.simulation.status = SimulationStatus.CURRENT
+    service.session.simulation.staleness_warning = None
+    service.session.last_updated = datetime.now(timezone.utc)
+    
+    # Save session
+    _save_session()
+    
+    return {
+        "status": "loaded",
+        "analysis_type": service.session.simulation.analysis_type,
+        "converged": service.session.simulation.converged,
+        "signal_count": len(service.session.simulation.signal_summaries) if service.session.simulation.signal_summaries else 0,
+        "op_point_count": len(service.session.simulation.op_points) if service.session.simulation.op_points else 0,
+    }
+
+
+class SimulationImportRequest(BaseModel):
+    """Request to import simulation from CSV and/or console."""
+    csv_path: Optional[str] = None
+    console_text: Optional[str] = None
+
+
+@app.post("/api/simulation/import")
+async def import_simulation(request: SimulationImportRequest):
+    """
+    Import simulation data from CSV file and/or console output.
+    
+    Archives current simulation (if any) to history and loads new data.
+    
+    User workflow:
+    1. Run simulation in KiCad
+    2. Export CSV: File -> Export current plot as CSV
+    3. Copy console output from simulator
+    4. Call this endpoint with both or either
+    """
+    global _project_root
+    
+    if not _project_root:
+        raise HTTPException(status_code=400, detail="No project loaded. Load a schematic first.")
+    
+    service = get_context_service()
+    
+    # Archive current simulation if exists
+    archive = SimulationArchive(str(_project_root))
+    archive.archive_current()
+    
+    # Ingest simulation data
+    ingested = ingest_simulation(
+        schematic_path=service.session.schematic.path,
+        schematic_hash=service.session.schematic.hash,
+        csv_path=request.csv_path,
+        console_text=request.console_text,
+    )
+    
+    # Save to current
+    archive.save_current(
+        metadata=to_run_metadata(ingested),
+        console_text=request.console_text,
+        csv_path=request.csv_path,
+    )
+    
+    # Update session state
+    service.session.simulation.status = SimulationStatus.CURRENT
+    service.session.simulation.last_run_id = ingested.run_id
+    service.session.simulation.last_run_timestamp = ingested.timestamp
+    service.session.simulation.analysis_type = ingested.analysis_type
+    service.session.simulation.converged = ingested.converged
+    service.session.simulation.op_points = ingested.op_points
+    service.session.simulation.warnings = ingested.warnings
+    service.session.simulation.errors = ingested.errors
+    service.session.simulation.staleness_warning = None
+    # Store schematic hash for staleness detection
+    service.session.simulation.schematic_hash = service.session.schematic.hash
+    service.session.last_updated = datetime.now(timezone.utc)
+    
+    # Save session
+    _save_session()
+    
+    return {
+        "status": "imported",
+        "run_id": ingested.run_id,
+        "analysis_type": ingested.analysis_type,
+        "converged": ingested.converged,
+        "warnings": ingested.warnings,
+        "errors": ingested.errors,
+        "op_point_count": len(ingested.op_points),
+        "signal_count": ingested.signal_count,
+        "sample_count": ingested.sample_count,
+    }
+
+
+
 @app.post("/api/llm/generate", response_model=GenerateResponse)
 async def generate_patch_plan(request: GenerateRequest):
     """
@@ -256,8 +596,12 @@ async def generate_patch_plan(request: GenerateRequest):
             model=request.model or "llama3.1:70b",
         )
     
-    # Create orchestrator
-    orchestrator = LLMOrchestrator(provider_config=config)
+    # Create orchestrator with shared context service
+    service = get_context_service()
+    orchestrator = LLMOrchestrator(
+        provider_config=config,
+        context_service=service,
+    )
     
     # Generate
     try:
@@ -265,6 +609,39 @@ async def generate_patch_plan(request: GenerateRequest):
             user_request=request.request,
             include_full_simulation=request.include_full_simulation,
         )
+        
+        # Record exchange in history
+        service.record_exchange(
+            user_request=request.request,
+            llm_response=proposal.raw_response,
+            reasoning_summary=proposal.reasoning,
+            patch_plan=proposal.patch_plan,
+        )
+        
+        # Persist to HistoryStore (SQLite)
+        if _history_store and service.session.session_id:
+            try:
+                from hephaistus_context.history_store import HistoryEntryRecord
+                import json
+                record = HistoryEntryRecord(
+                    id=str(uuid.uuid4())[:12],
+                    session_id=service.session.session_id,
+                    timestamp=datetime.now(timezone.utc),
+                    user_request=request.request,
+                    user_context=None,
+                    llm_response=proposal.raw_response,
+                    reasoning_summary=proposal.reasoning,
+                    patch_plan_json=json.dumps(proposal.patch_plan) if proposal.patch_plan else None,
+                    validation_result=None,
+                    validation_json=None,
+                    user_action=None,
+                    user_feedback=None,
+                    context_tokens=0,
+                    response_tokens=0,
+                )
+                _history_store.add_entry(record)
+            except Exception as e:
+                print(f"Warning: Failed to persist history: {e}")
         
         return GenerateResponse(
             raw_response=proposal.raw_response,

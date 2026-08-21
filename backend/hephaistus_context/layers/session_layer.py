@@ -38,18 +38,59 @@ class SessionLayer:
         lines.append(f"Components: {sch.component_count}")
         lines.append(f"Nets: {sch.net_count}")
         
+        # Detailed component list
         if sch.components:
-            refs = [c.get("reference", "?") for c in sch.components[:25]]
-            lines.append(f"References: {', '.join(refs)}")
-            if sch.component_count > 25:
-                lines.append(f"  ... and {sch.component_count - 25} more")
+            lines.append("")
+            lines.append("#### Components")
+            for c in sch.components[:50]:  # Limit to avoid token bloat
+                ref = c.get("reference", "?")
+                lib_id = c.get("lib_id", "")
+                value = c.get("value", "")
+                # Format: R1 (Device:R) - 10k
+                if value:
+                    lines.append(f"- {ref} ({lib_id}): {value}")
+                else:
+                    lines.append(f"- {ref} ({lib_id})")
+                
+                # Include pin-net assignments
+                pins = c.get("pins", {})
+                if pins:
+                    pin_strs = []
+                    # Handle both dict format {"1": "net_name"} and list format [{"number": "1", "net": "net_name"}]
+                    if isinstance(pins, dict):
+                        for pin_num, net_name in pins.items():
+                            pin_strs.append(f"{pin_num}→{net_name}")
+                    elif isinstance(pins, list):
+                        for pin_info in pins:
+                            pin_num = pin_info.get("number", "?")
+                            net_name = pin_info.get("net", "?")
+                            pin_strs.append(f"{pin_num}→{net_name}")
+                    if pin_strs:
+                        lines.append(f"  Pins: {', '.join(pin_strs)}")
+            
+            if sch.component_count > 50:
+                lines.append(f"  ... and {sch.component_count - 50} more")
         
+        # Net list (summarized)
+        if sch.nets:
+            lines.append("")
+            lines.append("#### Nets")
+            for n in sch.nets[:20]:  # Limit
+                name = n.get("name", "?")
+                pins = n.get("pins", [])
+                pin_count = len(pins) if isinstance(pins, list) else 0
+                lines.append(f"- {name}: {pin_count} pins")
+            
+            if sch.net_count > 20:
+                lines.append(f"  ... and {sch.net_count - 20} more")
+        
+        # Simulation directives
         if sch.directives:
-            lines.append("Simulation directives:")
+            lines.append("")
+            lines.append("#### Simulation Directives")
             for d in sch.directives:
-                dtype = d.get("directive_type", "unknown")
                 text = d.get("text", "")
-                lines.append(f"  {text}")
+                lines.append(f"{text}")
         
         # Simulation state
         lines.append("")
@@ -90,5 +131,23 @@ class SessionLayer:
         
         if directives.target_metrics:
             lines.append(f"Target metrics: {', '.join(directives.target_metrics)}")
+        
+        # SPICE libraries
+        if self.session.spice_libraries:
+            lines.append("")
+            lines.append("### SPICE Models")
+            for lib in self.session.spice_libraries:
+                lines.append(f"")
+                lines.append(f"#### {lib.name}")
+                
+                # List subcircuits and models
+                if lib.subcircuits:
+                    lines.append(f"Subcircuits: {', '.join(lib.subcircuits)}")
+                if lib.models:
+                    lines.append(f"Models: {', '.join(lib.models)}")
+                
+                # Include full content (comments already stripped)
+                lines.append("")
+                lines.append(lib.content)
         
         return "\n".join(lines)

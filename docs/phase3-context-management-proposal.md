@@ -385,6 +385,307 @@ backend/hephaistus_llm/
 
 ---
 
+---
+
+## Simulation Data Ingestion (Phase 3.7)
+
+### Overview
+
+KiCad's Eeschema/ngspice integration runs simulations **in-memory** and does NOT write results to disk. This requires an explicit ingestion workflow where the user provides simulation data to HephAIstus.
+
+### User Workflow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  KiCad Simulator                                                │
+│  ┌──────────────┐                                               │
+│  │ Run Simulation│──► Console Output ──► User copies           │
+│  └──────────────┘                                               │
+│  ┌──────────────┐                                               │
+│  │ File►Export  │──► <project>/<schematic>-<analysis>.csv      │
+│  │ Plot as CSV  │                                               │
+│  └──────────────┘                                               │
+└─────────────────────────────────────────────────────────────────┘
+                              │                      │
+                              ▼                      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  HephAIstus Companion                                           │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │ [Load Simulation] Button                                │   │
+│  │                                                          │   │
+│  │ CSV File: [Browse...] <schematic>-<analysis>.csv        │   │
+│  │            (user selects from .hephaistus/simulations/) │   │
+│  │                                                          │   │
+│  │ Console Output:                                          │   │
+│  │ ┌──────────────────────────────────────────────────────┐ │   │
+│  │ │ [Paste ngspice console output here]                  │ │   │
+│  │ │                                                       │ │   │
+│  │ │ - DC operating point results                          │ │   │
+│  │ │ - Convergence status                                  │ │   │
+│  │ │ - Warnings and errors                                 │ │   │
+│  │ └──────────────────────────────────────────────────────┘ │   │
+│  │                                                          │   │
+│  │ [Import] [Cancel]                                        │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  Either field can be empty:                                    │
+│  - DC op analysis: console only                                │
+│  - Transient/AC: both CSV and console                          │
+│  - Successful transient: console less valuable                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Storage Structure
+
+```
+<project>/.hephaistus/
+├── session.json              # Current session state
+├── history.db                 # Conversation history
+└── simulations/
+    ├── current/               # Active simulation (moved here on ingest)
+    │   ├── run_metadata.json
+    │   ├── console.txt
+    │   └── waveform.csv
+    └── history/               # FIFO archive (last 5 runs)
+        ├── 2026-08-21T22-00-00/
+        │   ├── run_metadata.json
+        │   ├── console.txt
+        │   └── waveform.csv
+        ├── 2026-08-21T20-30-00/
+        │   └── ...
+        └── (max 5 folders)
+```
+
+### Freshness Strategy
+
+**On Every Prompt:**
+1. Compare current schematic hash to simulation's schematic hash
+2. If match → simulation is "current" (include in context)
+3. If mismatch → simulation is "stale" (warn in context)
+4. Archive current simulation to history before replacing
+
+**FIFO Archive:**
+- Keep last 5 simulation runs in `simulations/history/`
+- Delete oldest when limit exceeded
+- Timestamp-based folder naming for traceability
+
+### Context Size Management
+
+#### Waveform CSV (Transient Analysis)
+
+For large CSV files (>10,000 rows), provide **summary only**:
+
+```yaml
+waveform_summary:
+  analysis_type: "transient"
+  duration: "10ms"
+  step: "1μs"
+  total_samples: 10000
+  signals:
+    - name: "V(dc_plus)"
+      min: 380.2
+      max: 420.5
+      mean: 400.1
+      std: 12.3
+      initial: 0.0
+      final: 400.0
+      trend: "settling"
+      settling_time: "2.3ms"
+      overshoot: "5.1%"
+    - name: "I(L1)"
+      peak: "1.2A"
+      trend: "oscillating"
+      frequency: "50kHz"
+  note: "Full waveform has 10,000 samples. Summary provided."
+  hint: "To reduce sampling: increase .tran step or use .options interp"
+```
+
+**LLM can request full data:**
+- "Show full V(dc_plus) data" → include all samples for that signal
+- "Show last 1000 samples" → include final N rows
+
+#### Console Output (All Analysis Types)
+
+Always included in context (usually compact):
+
+```yaml
+console_summary:
+  analysis: ".tran 1u 10m"
+  convergence: "converged"
+  operating_points:
+    - node: "dc_plus" value: "400.0V"
+    - node: "dc_minus" value: "0.0V"
+  warnings:
+    - "timestep too small at t=1ns"
+  errors: []
+```
+
+**Why Console Matters:**
+- Convergence failures → diagnostic hints
+- Operating points → DC bias validation
+- Warnings → transient quality issues
+- Errors → topology or model problems
+
+### Module Structure
+
+```
+backend/hephaistus_simulation/
+├── __init__.py
+├── parser.py           # ngspice output parsing (EXISTS)
+├── run_metadata.py     # simulation tracking (EXISTS)
+├── context.py          # LLM context assembly (EXISTS)
+├── waveform.py         # signal analysis (EXISTS)
+├── cli.py              # CLI commands (EXISTS)
+├── ingestion.py        # NEW: file ingestion + validation
+└── archiver.py          # NEW: FIFO history management
+```
+
+### API Endpoints
+
+```yaml
+POST /api/simulation/import:
+  request:
+    csv_path: "<project>/.hephaistus/simulations/<file>.csv"
+    console_text: "Circuit: ...\nDoing analysis..."
+  response:
+    status: "imported"
+    analysis_type: "transient"
+    signals: 5
+    convergence: "converged"
+    warnings: []
+
+GET /api/simulation/history:
+  response:
+    runs:
+      - timestamp: "2026-08-21T22:00:00Z"
+        analysis: "tran"
+        status: "stale"
+        schematic_hash: "abc123"
+      - ...
+
+DELETE /api/simulation/clear:
+  response:
+    status: "cleared"
+```
+
+### UI Component: ImportSimulationDialog
+
+```tsx
+// companion/src/components/ImportSimulationDialog.tsx
+interface ImportSimulationProps {
+  onImport: (data: SimulationData) => void;
+}
+
+// Two-mode dialog:
+// 1. CSV only (transient/AC waveforms)
+// 2. Console only (DC operating point)
+// 3. Both (full context)
+
+// CSV browser starts in <project>/.hephaistus/simulations/
+// Console textbox accepts paste from KiCad simulator console
+```
+
+### Implementation Checklist
+
+**Simulation Ingestion:**
+- [ ] `ingestion.py`: CSV parser + console parser integration
+- [ ] `archiver.py`: FIFO history management (max 5 runs)
+- [ ] `POST /api/simulation/import`: Ingestion endpoint
+- [ ] `DELETE /api/simulation/clear`: Clear current simulation
+- [ ] SessionState: Add `simulation_hash` for freshness tracking
+- [ ] SimulationLayer: Include summary + staleness warning
+- [ ] Frontend: ImportSimulationDialog component
+- [ ] Frontend: SimulationStatus indicator (current/stale)
+
+**SPICE Library Context:**
+- [ ] Parser: Extract `Sim.Library` properties from schematic
+- [ ] Context: Include `.lib` file contents in session layer
+- [ ] Path resolution: Find `.lib` files in project folder
+- [ ] Token management: Summarize large model files
+
+### SPICE Library Context
+
+**Problem:** Schematics reference SPICE models via `.lib` files (e.g., `FUJI_2MBI1500XYF170.lib`). The LLM needs access to model parameters to understand component behavior and troubleshoot simulation issues.
+
+**Discovery:**
+```kicad_sch
+(property "Sim.Library" "FUJI_2MBI1500XYF170.lib"
+ (at 0 0 0)
+ (unlocked yes)
+ (effects (font (size 1.27 1.27)))
+)
+```
+
+**Implementation:**
+
+1. **Parse schematic for library references:**
+   - Extract all `Sim.Library` properties
+   - Collect unique `.lib` filenames
+
+2. **Resolve library paths:**
+   - Check `<project>/<libname>.lib`
+   - Check `<project>/models/<libname>.lib`
+   - Fallback to KiCad global library paths
+
+3. **Include in session context:**
+   ```yaml
+   spice_libraries:
+     - name: "FUJI_2MBI1500XYF170.lib"
+       models:
+         - "2MBI1500XYF170" (subcircuit, IGBT + diode)
+       tokens: ~200
+       summary: "IGBT module with freewheeling diode"
+   ```
+
+4. **Token management:**
+
+   SPICE libraries are **complete circuit definitions** - the LLM needs full visibility to understand:
+   - Topology (e.g., diode is antiparallel to IGBT)
+   - Pin assignments (which pin connects to cathode/anode)
+   - Model parameters (threshold, capacitances, breakdown voltages)
+   - Subcircuit structure (internal components like gate resistor)
+
+   **Include complete library content:**
+   - Strip comments (lines starting with `*`) to save tokens and avoid hallucinations
+   - Keep all `.MODEL`, `.SUBCKT`, and component lines
+   - Small files (<5KB): include verbatim
+   - Large files (>5KB): still include complete, just be aware of token cost
+
+**Example Context (after stripping comments):**
+```
+## SPICE Models
+
+### FUJI_2MBI1500XYF170.lib
+.SUBCKT 2MBI1500XYF170 C G E
+Rg G G_int 0.67
+M1 C G_int E E NMOS_MODEL 
+Cge G_int E 184.65n
+Cgc G_int C 0.35n
+Cce C E 11.15n
+D1 E C FWD_MODEL
+.MODEL NMOS_MODEL NMOS(VTO=6.5 KP=100)
+.MODEL FWD_MODEL D(BV=1700 IS=1E-9 N=1.5 RS=0.0004)
+.ENDS 2MBI1500XYF170
+```
+
+The LLM can now reason:
+- "The diode D1 is between E and C (antiparallel to the IGBT)"
+- "Gate resistor Rg = 0.67Ω is internal to the module"
+- "Capacitances Cge, Cgc, Cce define switching behavior"
+- "Pin C is Collector, G is Gate, E is Emitter"
+
+### Future Enhancements
+
+| Phase | Feature | Description |
+|-------|---------|-------------|
+| Short | KiCad Plugin | Auto-export simulation results on completion |
+| Medium | Agentic Simulation | HephAIstus runs ngspice directly for optimization |
+| Long | KiCad IPC | Direct integration as docked panel |
+| Long | Multi-simulator | Support PSpice, LTspice, other engines |
+
+---
+
 ## Design Principles
 
 1. **Auditability** — Every decision is traceable

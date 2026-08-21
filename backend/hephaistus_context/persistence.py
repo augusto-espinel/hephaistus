@@ -26,18 +26,50 @@ class SessionPersistence:
     """
     Handles saving and loading session state to/from JSON.
     
-    Session files store:
-    - Session metadata (id, timestamps)
-    - Schematic state and hash
-    - Simulation state
-    - User directives
-    - Conversation history
-    - Reasoning trace
+    Sessions are stored project-relative in <project>/.hephaistus/session.json.
+    
+    This enables:
+    - Project portability (session travels with project)
+    - Git-friendly workflow (can .gitignore or commit)
+    - Multiple projects without interference
     """
     
-    def __init__(self, save_dir: str = ".hephaistus/sessions"):
-        self.save_dir = Path(save_dir)
-        self.save_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self, project_root: Optional[str] = None):
+        """
+        Initialize persistence for a project.
+        
+        Args:
+            project_root: Path to KiCad project directory. If None, must be set
+                          via set_project() before saving/loading.
+        """
+        self.project_root: Optional[Path] = Path(project_root) if project_root else None
+    
+    def set_project(self, project_root: str) -> None:
+        """Set or update the project root."""
+        self.project_root = Path(project_root)
+    
+    def _ensure_project_dir(self) -> Path:
+        """Ensure .hephaistus directory exists and return its path."""
+        if not self.project_root:
+            raise ValueError("Project root not set. Call set_project() first.")
+        
+        hephaistus_dir = self.project_root / ".hephaistus"
+        hephaistus_dir.mkdir(parents=True, exist_ok=True)
+        return hephaistus_dir
+    
+    def session_file(self) -> Path:
+        """Get the session.json path for current project."""
+        return self._ensure_project_dir() / "session.json"
+    
+    def history_file(self) -> Path:
+        """Get the history.db path for current project."""
+        return self._ensure_project_dir() / "history.db"
+    
+    def simulations_dir(self) -> Path:
+        """Get the simulations directory for current project."""
+        sim_dir = self._ensure_project_dir() / "simulations"
+        sim_dir.mkdir(exist_ok=True)
+        return sim_dir
     
     def _serialize_datetime(self, dt: datetime) -> str:
         """Convert datetime to ISO string."""
@@ -55,35 +87,32 @@ class SessionPersistence:
     def save_session(
         self,
         session: SessionState,
-        history: HistoryManager,
-        reasoning: ReasoningTrace,
-        filename: Optional[str] = None,
+        history: Optional[HistoryManager] = None,
+        reasoning: Optional[ReasoningTrace] = None,
     ) -> Path:
         """
-        Save session state to JSON file.
+        Save session state to project-relative JSON file.
         
         Args:
             session: Current session state
-            history: Conversation history
-            reasoning: Reasoning trace
-            filename: Optional filename (defaults to session_id.json)
+            history: Conversation history (optional)
+            reasoning: Reasoning trace (optional)
             
         Returns:
             Path to saved file
         """
-        if filename is None:
-            filename = f"{session.session_id}.json"
-        
-        filepath = self.save_dir / filename
+        filepath = self.session_file()
         
         data = {
-            "version": 1,
+            "version": 2,  # Bumped for project-relative paths
             "session": {
                 "session_id": session.session_id,
+                "project_root": session.project_root,
                 "created_at": self._serialize_datetime(session.created_at),
                 "last_updated": self._serialize_datetime(session.last_updated),
                 "schematic": {
                     "path": session.schematic.path,
+                    "relative_path": session.schematic.relative_path,
                     "hash": session.schematic.hash,
                     "component_count": session.schematic.component_count,
                     "net_count": session.schematic.net_count,
@@ -100,27 +129,24 @@ class SessionPersistence:
                 "directives": session.directives.to_dict(),
                 "pending_patch_plan": session.pending_patch_plan,
             },
-            "history": history.export(),
-            "reasoning": reasoning.export(),
+            "history": history.export() if history else {},
+            "reasoning": reasoning.export() if reasoning else {},
         }
         
         filepath.write_text(json.dumps(data, indent=2))
         return filepath
     
-    def load_session(
-        self,
-        filename: str,
-    ) -> tuple[SessionState, HistoryManager, ReasoningTrace]:
+    def load_session(self) -> Optional[SessionState]:
         """
-        Load session state from JSON file.
+        Load session state from project-relative JSON file.
         
-        Args:
-            filename: Session filename
-            
         Returns:
-            Tuple of (SessionState, HistoryManager, ReasoningTrace)
+            SessionState if session file exists, None otherwise
         """
-        filepath = self.save_dir / filename
+        filepath = self.session_file()
+        if not filepath.exists():
+            return None
+        
         data = json.loads(filepath.read_text())
         
         # Reconstruct session state
@@ -128,6 +154,7 @@ class SessionPersistence:
         
         schematic = SchematicState(
             path=session_data.get("schematic", {}).get("path", ""),
+            relative_path=session_data.get("schematic", {}).get("relative_path", ""),
             hash=session_data.get("schematic", {}).get("hash", ""),
             component_count=session_data.get("schematic", {}).get("component_count", 0),
             net_count=session_data.get("schematic", {}).get("net_count", 0),
@@ -158,8 +185,9 @@ class SessionPersistence:
             target_metrics=directives_data.get("target_metrics", ["performance"]),
         )
         
-        session = SessionState(
+        return SessionState(
             session_id=session_data.get("session_id", ""),
+            project_root=session_data.get("project_root", ""),
             created_at=self._deserialize_datetime(session_data.get("created_at")),
             last_updated=self._deserialize_datetime(session_data.get("last_updated")),
             schematic=schematic,
@@ -167,25 +195,51 @@ class SessionPersistence:
             directives=directives,
             pending_patch_plan=session_data.get("pending_patch_plan"),
         )
+    
+    def has_session(self) -> bool:
+        """Check if a session file exists for the current project."""
+        return self.session_file().exists()
+    
+    def discover_project_root(self, schematic_path: str) -> str:
+        """
+        Infer project root from schematic path.
         
-        # Reconstruct history
-        history_data = data.get("history", {})
-        history = HistoryManager(max_window=history_data.get("max_window", 10))
+        Looks for:
+        - Directory containing .kicad_pro file (KiCad 6+)
+        - Directory containing .kicad_sch file (KiCad 5 fallback)
+        - Parent directory of schematic if no project file found
         
-        # Note: Full history entries would need more detailed deserialization
-        # For now, we just set the summaries
-        for summary_data in history_data.get("summaries", []):
-            summary = HistorySummary(
-                period_start=self._deserialize_datetime(summary_data.get("period_start")),
-                period_end=self._deserialize_datetime(summary_data.get("period_end")),
-                entry_count=summary_data.get("entry_count", 0),
-                summary_text=summary_data.get("summary", ""),
-                key_decisions=summary_data.get("key_decisions", []),
-                rejected_approaches=summary_data.get("rejected", []),
-            )
-            history.summaries.append(summary)
+        Args:
+            schematic_path: Path to .kicad_sch file
+            
+        Returns:
+            Inferred project root directory
+        """
+        sch_path = Path(schematic_path).resolve()
+        parent = sch_path.parent
         
-        # Reconstruct reasoning trace
+        # Look for .kicad_pro file in parent directories
+        for candidate in [parent] + list(parent.parents):
+            if list(candidate.glob("*.kicad_pro")):
+                return str(candidate)
+        
+        # Fallback: use schematic's parent directory
+        return str(parent)
+        
+    def load_history(self) -> HistoryManager:
+        """Load history manager from project-relative history.db."""
+        history = HistoryManager()
+        # HistoryStore handles SQLite persistence internally
+        # This is kept for compatibility but history is now in HistoryStore
+        return history
+    
+    def load_reasoning(self) -> ReasoningTrace:
+        """Load reasoning trace from session file."""
+        filepath = self.session_file()
+        if not filepath.exists():
+            return ReasoningTrace()
+        
+        data = json.loads(filepath.read_text())
         reasoning_data = data.get("reasoning", {})
         reasoning = ReasoningTrace()
         reasoning._step_counter = reasoning_data.get("step_counter", 0)
@@ -200,28 +254,11 @@ class SessionPersistence:
             )
             reasoning.decisions.append(dp)
         
-        return session, history, reasoning
+        return reasoning
     
-    def list_sessions(self) -> list[Dict[str, Any]]:
-        """List all saved sessions."""
-        sessions = []
-        for filepath in sorted(self.save_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
-            try:
-                data = json.loads(filepath.read_text())
-                session_data = data.get("session", {})
-                sessions.append({
-                    "filename": filepath.name,
-                    "session_id": session_data.get("session_id", "?"),
-                    "schematic": session_data.get("schematic", {}).get("path", "(none)"),
-                    "last_updated": session_data.get("last_updated", "?"),
-                })
-            except (json.JSONDecodeError, KeyError):
-                continue
-        return sessions
-    
-    def delete_session(self, filename: str) -> bool:
-        """Delete a saved session file."""
-        filepath = self.save_dir / filename
+    def clear_session(self) -> bool:
+        """Delete session file for current project."""
+        filepath = self.session_file()
         if filepath.exists():
             filepath.unlink()
             return True

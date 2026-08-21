@@ -91,6 +91,7 @@ class LLMOrchestrator:
         provider_config: Optional[ProviderConfig] = None,
         budget_config: Optional[TokenBudgetConfig] = None,
         system_prompt: str = HEPHAISTUS_SYSTEM_PROMPT,
+        context_service: Optional[ContextService] = None,
     ):
         """
         Initialize orchestrator.
@@ -99,11 +100,14 @@ class LLMOrchestrator:
             provider_config: LLM provider configuration
             budget_config: Token budget configuration
             system_prompt: System prompt for the LLM
+            context_service: Shared context service (if None, creates new instance)
         """
         self.provider_config = provider_config or ProviderConfig.openrouter()
         self.budget_config = budget_config or TokenBudgetConfig()
         self.system_prompt = system_prompt
-        self.context_service = ContextService(budget_config=self.budget_config)
+        
+        # Use shared context service if provided, otherwise create new
+        self.context_service = context_service or ContextService(budget_config=self.budget_config)
         
         # Initialize provider
         self._provider = self._create_provider()

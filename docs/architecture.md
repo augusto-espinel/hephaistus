@@ -147,7 +147,134 @@ Waveforms are summarized to minimize token usage:
 - Configurable limits: max_raw_points, max_signals
 - LLM guidance for efficient simulation setup included in context
 
-### 1.6 Simulation parameter management
+### 1.6 Session persistence
+
+**Project-scoped sessions:**
+
+Sessions are stored in the KiCad project directory:
+
+```
+<project-folder>/
+├── <project>.kicad_pro
+├── <project>.kicad_sch
+└── .hephaistus/
+    ├── session.json      # Current session state
+    ├── history.db        # Project-scoped conversation history (SQLite/FTS5)
+    └── simulations/
+        ├── current/       # Active simulation
+        │   ├── run_metadata.json
+        │   ├── console.txt
+        │   └── waveform.csv
+        └── history/       # FIFO archive (last 5 runs)
+```
+
+**Benefits:**
+- Project portability (session travels with project)
+- Git-friendly (can `.gitignore` or commit)
+- Multiple projects without interference
+- Clear ownership: session belongs to the project
+
+**Session contents:**
+- Session metadata (id, timestamps)
+- Schematic state (path, hash, component count, net count)
+- Simulation state (status, last run, staleness)
+- User directives (expertise level, change aggression)
+- Conversation history (via HistoryStore)
+- Reasoning trace
+
+**API endpoints:**
+- `POST /api/schematic/load` — Load schematic, discover project root, persist session
+- `GET /api/session/status` — Check current session state
+- `POST /api/session/restore` — Restore saved session for current project
+
+**Context sharing:**
+
+The LLM orchestrator shares the ContextService instance with the API server, ensuring loaded schematic state is visible to LLM requests.
+
+### 1.6.1 Simulation data ingestion
+
+**Problem:** KiCad's Eeschema/ngspice integration runs simulations in-memory and does NOT write results to disk. Users must explicitly export and ingest simulation data.
+
+**Workflow:**
+
+1. User runs simulation in KiCad
+2. User exports CSV from plot window (File → Export current plot as CSV)
+3. User copies console output (simulator window)
+4. User clicks [Load Simulation] in companion
+5. Companion ingests data, archives previous run, updates session state
+
+**Freshness tracking:**
+
+On every LLM request, the ContextService compares the current schematic hash to the simulation's schematic hash:
+- Match → simulation is "current" (include full context)
+- Mismatch → simulation is "stale" (warn in context)
+
+**FIFO archive:**
+
+Previous simulations are archived to `simulations/history/` with timestamp-based folder names. Maximum 5 runs kept.
+
+**Context size management:**
+
+For large CSV files (>10,000 rows), provide summary only:
+- Statistics: min, max, mean, std, initial, final
+- Trend detection: settling, oscillating, rising, falling
+- Key points: final N, initial N, peaks, crossings
+- LLM can request full data on demand
+
+**Implementation status:**
+
+- `hephaistus_simulation/parser.py` — ngspice console, DC op, raw waveform parsing ✅
+- `hephaistus_simulation/ingestion.py` — file ingestion + validation (TODO)
+- `hephaistus_simulation/archiver.py` — FIFO history management (TODO)
+- `POST /api/simulation/import` — Ingestion endpoint (TODO)
+
+### 1.6.2 SPICE Library Context
+
+**Problem:** Schematics reference SPICE models via `.lib` files (e.g., `FUJI_2MBI1500XYF170.lib`). The LLM needs model parameters to understand component behavior and troubleshoot simulation issues.
+
+**Discovery:** Components with SPICE models have `Sim.Library` properties:
+
+```kicad_sch
+(property "Sim.Library" "FUJI_2MBI1500XYF170.lib"
+  (at 0 0 0)
+  (unlocked yes)
+)
+```
+
+**Implementation:**
+
+1. **Parse schematic for library references:**
+   - Extract all `Sim.Library` properties
+   - Collect unique `.lib` filenames
+
+2. **Resolve library paths:**
+   - Check `<project>/<libname>.lib` (project-local)
+   - Check `<project>/models/<libname>.lib`
+   - Fallback to KiCad global library paths
+
+3. **Include in session context:**
+   ```yaml
+   spice_libraries:
+     - name: "FUJI_2MBI1500XYF170.lib"
+       models:
+         - "2MBI1500XYF170" (subcircuit, IGBT + diode)
+       tokens: ~200
+   ```
+
+4. **Token management:**
+
+   SPICE libraries are **complete circuit definitions** - the LLM needs full visibility to understand:
+   - Topology (e.g., diode is antiparallel to IGBT)
+   - Pin assignments (cathode/anode connections)
+   - Model parameters (threshold, capacitances, breakdown)
+   - Subcircuit structure (internal components)
+
+   **Include complete library content:**
+   - Strip comments (lines starting with `*`) to save tokens
+   - Keep all `.MODEL`, `.SUBCKT`, and component lines
+   - Code is circuit - the LLM needs to see the full definition
+
+### 1.7 Simulation parameter management
 
 Responsibilities:
 
@@ -360,6 +487,10 @@ This adapter should consume the same backend; it must not become a parallel muta
 - **KiCad ingestion (2026-07-18):** Extension activation, file watcher, Python/KiUtils path resolution, KiCad 10 parsing, JSON state generation. Tested with `rectifier.kicad_sch` (9 components, 5 nets).
 - **Stub-based net restructuring (2026-08-04):** Apply flow rebuilt around stubs (wire + net label). 26/26 tests passing covering: no-op, series insertion, chained splits, parallel additions, RL chain with Device:L embedding, duplicate-UUID abort. kicad-cli ERC confirms zero new violations vs fixture baseline.
 - **Simulation output parsing (2026-08-20):** Ngspice console output, DC operating points, and raw waveform parsing. Run metadata with schematic hash correlation. LLM context assembly from schematic + simulation state.
+
+### Completed
+
+- **Session persistence (2026-08-21):** Project-scoped sessions stored in `.hephaistus/session.json`. Session includes schematic state, simulation state, user directives, and conversation history. Auto-discovery of project root from schematic path.
 
 ### In progress
 

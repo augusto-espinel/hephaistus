@@ -236,7 +236,8 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                 "device": props.get('Sim.Device', ''),
                 "type": props.get('Sim.Type', ''),
                 "params": props.get('Sim.Params', ''),
-                "pins": props.get('Sim.Pins', '')
+                "pins": props.get('Sim.Pins', ''),
+                "library": props.get('Sim.Library', ''),
             }
             
             # Extract pins with net connectivity
@@ -259,7 +260,8 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
             comp = {
                 "uuid": getattr(symbol, 'uuid', 'unknown'),
                 "reference": props.get('Reference', ''),
-                "libId": lib_id,
+                "lib_id": lib_id,  # snake_case for consistency
+                "value": props.get('Value', ''),  # extracted directly
                 "footprint": props.get('Footprint', ''),
                 "position": position,
                 "properties": {
@@ -442,11 +444,25 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
         # Parse simulation directives (text elements starting with '.')
         directives = parse_text_elements(schematic)
         
+        # Filter out power symbols (references starting with #)
+        # These are virtual symbols like #PWR01, #FL01 that represent power nets
+        filtered_components = [
+            c for c in components
+            if not c.get("reference", "").startswith("#")
+        ]
+        
+        # Extract unique SPICE library references
+        spice_libraries = list(set(
+            c["spice"]["library"]
+            for c in components
+            if c.get("spice", {}).get("library")
+        ))
+        
         return {
             "schemaVersion": "1.1.0",
             "source": os.path.basename(path),
             "circuitName": os.path.splitext(os.path.basename(path))[0],
-            "components": components,
+            "components": filtered_components,
             "nets": nets,
             "wires": [{"uuid": w["uuid"], "points": [{"x": p[0], "y": p[1]} for p in w["points"]]} for w in wire_segments],
             "junctions": [{"uuid": j, "position": {"x": p[0], "y": p[1]}} for j, p in [(j, list(junction_positions)[i]) for i, j in enumerate(list(junction_positions))]],
@@ -458,6 +474,7 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                 "position": list(d.position),
                 "exclude_from_sim": d.exclude_from_sim
             } for d in directives],
+            "spice_libraries": spice_libraries,
             "titleBlock": title_info,
             "metadata": {
                 "parser": "kiutils",

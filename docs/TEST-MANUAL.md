@@ -1,115 +1,551 @@
-# Manual Test Plan: Phase 3 Integration
+# HephAIstus Manual Test Procedures
+
+Version: 1.0
+Date: 2026-08-21
 
 ## Prerequisites
 
-### 1. Environment Setup
+- Python 3.9+ with virtual environment
+- Ollama running locally (for local LLM tests)
+- OpenRouter API key configured in `.env`
+- KiCad installed (for schematic validation)
 
-```bash
-# Navigate to project
-cd /path/to/hephaistus
+## Environment Setup
 
-# Create .env file for API key (optional - only for OpenRouter)
-echo "OPENROUTER_API_KEY=your-key-here" > .env
-
-# Or export directly
-export OPENROUTER_API_KEY="your-key-here"
-```
-
-**API Key Options:**
-- **OpenRouter** (recommended for testing): Get key from https://openrouter.ai/keys
-- **Ollama** (local, no key required): Install from https://ollama.ai and run `ollama serve`
-
-### 2. Start Servers
-
-**Terminal 1 - Backend:**
 ```bash
 cd /path/to/hephaistus
 source .venv/bin/activate
-uvicorn api.server:app --host 127.0.0.1 --port 8000 --reload
+pip install -e .
+pip install python-dotenv  # If not already installed
 ```
 
-**Terminal 2 - Frontend:**
+Create `.env` file in project root:
+
+```
+OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+Start the API server:
+
 ```bash
-cd /path/to/hephaistus/companion
-npm install  # First time only
-npm run dev
+uvicorn api.server:app --host 127.0.0.1 --port 8000
 ```
-
-**Verify:**
-- Backend: http://localhost:8000 should return `{"status":"ok"}`
-- Frontend: http://localhost:3000 should show HephAIstus UI
 
 ---
 
-## Test Cases
+## Test 1: Health Check
 
-### Test 1: Backend Health Check
+**Purpose:** Verify server is running.
 
-**Purpose:** Verify backend is running and responding.
-
-**Steps:**
 ```bash
-curl http://localhost:8000/
+curl -s http://localhost:8000/ | python3 -m json.tool
 ```
 
 **Expected:**
 ```json
-{"status":"ok","service":"hephaistus-companion-api"}
+{
+  "status": "ok",
+  "service": "hephaistus-companion-api"
+}
 ```
 
 ---
 
-### Test 2: Load Schematic
+## Test 2: Session Status (Empty)
 
-**Purpose:** Verify schematic parsing and state management.
+**Purpose:** Verify empty session state on fresh server.
 
-**Steps:**
 ```bash
-curl -X POST "http://localhost:8000/api/schematic/load?path=fixtures/schematics/rectifier.kicad_sch"
+curl -s http://localhost:8000/api/session/status | python3 -m json.tool
+```
+
+**Expected:**
+```json
+{
+  "has_session": false,
+  "session_id": "...",
+  "project_root": null,
+  "schematic": {
+    "path": null,
+    "relative_path": null,
+    "hash": null,
+    "component_count": 0,
+    "net_count": 0
+  },
+  "simulation": {
+    "status": "none",
+    "last_run": null
+  },
+  "last_updated": "..."
+}
+```
+
+---
+
+## Test 3: Load Schematic
+
+**Purpose:** Load a KiCad schematic and verify session persistence.
+
+```bash
+curl -s -X POST "http://localhost:8000/api/schematic/load?path=/path/to/hephaistus/fixtures/schematics/rectifier.kicad_sch" | python3 -m json.tool
 ```
 
 **Expected:**
 ```json
 {
   "status": "loaded",
-  "path": "fixtures/schematics/rectifier.kicad_sch",
+  "path": "/path/to/hephaistus/fixtures/schematics/rectifier.kicad_sch",
+  "project_root": "/path/to/hephaistus/fixtures/schematics",
+  "relative_path": "rectifier.kicad_sch",
   "components": 10,
-  "nets": 5
+  "nets": 5,
+  "session_file": "/path/to/hephaistus/fixtures/schematics/.hephaistus/session.json"
 }
+```
+
+**Verify:**
+- `project_root` is discovered correctly
+- `.hephaistus/` directory created
+- `session.json` file exists
+
+```bash
+ls -la fixtures/schematics/.hephaistus/
+cat fixtures/schematics/.hephaistus/session.json | python3 -m json.tool
 ```
 
 ---
 
-### Test 3: Get Schematic State
+## Test 4: Session Status (Loaded)
 
-**Purpose:** Verify schematic state endpoint returns parsed data.
+**Purpose:** Verify session state reflects loaded schematic.
 
-**Steps:**
 ```bash
-curl http://localhost:8000/api/schematic/state
+curl -s http://localhost:8000/api/session/status | python3 -m json.tool
 ```
 
 **Expected:**
 ```json
 {
-  "path": "fixtures/schematics/rectifier.kicad_sch",
-  "hash": "...",
-  "component_count": 10,
-  "net_count": 5,
-  "has_unsaved_changes": false,
+  "has_session": true,
+  "session_id": "...",
+  "project_root": "/path/to/hephaistus/fixtures/schematics",
+  "schematic": {
+    "path": "/path/to/hephaistus/fixtures/schematics/rectifier.kicad_sch",
+    "relative_path": "rectifier.kicad_sch",
+    "hash": "8ddd5b109eb9f3eb",
+    "component_count": 10,
+    "net_count": 5
+  },
   ...
 }
 ```
 
 ---
 
-### Test 4: Get Simulation State
+## Test 5: Schematic State Endpoint
 
-**Purpose:** Verify simulation state endpoint returns staleness info.
+**Purpose:** Verify schematic state endpoint returns component/net details.
+
+```bash
+curl -s http://localhost:8000/api/schematic/state | python3 -m json.tool
+```
+
+**Expected:**
+```json
+{
+  "path": "/path/to/hephaistus/fixtures/schematics/rectifier.kicad_sch",
+  "hash": "8ddd5b109eb9f3eb",
+  "component_count": 10,
+  "net_count": 5,
+  "components": [...],
+  "nets": [...],
+  "directives": [...],
+  "last_modified": "...",
+  "has_unsaved_changes": false
+}
+```
+
+---
+
+## Test 6: LLM Query (Ollama - Local)
+
+**Purpose:** Verify LLM can answer questions about loaded schematic.
+
+```bash
+curl -s -X POST http://localhost:8000/api/llm/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request": "What components are in this schematic? List them.",
+    "provider": "ollama",
+    "model": "gemma4:e4b"
+  }' | python3 -m json.tool
+```
+
+**Expected:** Response lists components from the schematic (C1, C2, D1-D4, R1, R2, V1).
+
+**Example response:**
+```json
+{
+  "raw_response": "Based on the current session state... The component references are:\n* Capacitors (C): C1, C2\n* Resistors (R): R1, R2\n* Diodes (D): D1, D2, D3, D4\n* Voltage Sources (V): V1...",
+  "is_clarification": false,
+  ...
+}
+```
+
+---
+
+## Test 7: LLM Query (OpenRouter - Cloud)
+
+**Purpose:** Verify OpenRouter provider works with API key.
+
+```bash
+curl -s -X POST http://localhost:8000/api/llm/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request": "Add a snubber circuit across D1",
+    "provider": "openrouter",
+    "model": "deepseek/deepseek-v4-pro-0813"
+  }' | python3 -m json.tool
+```
+
+**Expected:** Response references loaded schematic components.
+
+---
+
+## Test 8: Clarification Flow
+
+**Purpose:** Verify LLM asks clarifying questions when context is insufficient.
+
+```bash
+curl -s -X POST http://localhost:8000/api/llm/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request": "Optimize the circuit for efficiency",
+    "provider": "ollama",
+    "model": "gemma4:e4b"
+  }' | python3 -m json.tool
+```
+
+**Expected:** Response asks clarifying questions about optimization goals, constraints, or circuit behavior.
+
+---
+
+## Test 9: Session Persistence Across Restart
+
+**Purpose:** Verify session survives server restart.
 
 **Steps:**
+
+1. Load schematic (Test 3)
+2. Verify session file exists
+3. Stop server: `pkill -f "uvicorn api.server:app"`
+4. Start server again
+5. Check session status (should be empty)
+6. Call restore endpoint:
+
 ```bash
-curl http://localhost:8000/api/simulation/state
+curl -s -X POST http://localhost:8000/api/session/restore | python3 -m json.tool
+```
+
+**Expected:** Session restored from `.hephaistus/session.json`.
+
+---
+
+## Test 10: Context Assembly
+
+**Purpose:** Verify context assembly for debugging.
+
+```bash
+curl -s -X POST http://localhost:8000/api/context/assemble \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request": "What is the power supply voltage?"
+  }' | python3 -m json.tool
+```
+
+**Expected:** Response includes assembled context with token breakdown.
+
+---
+
+## Test 11: History Search
+
+**Purpose:** Verify conversation history is persisted.
+
+```bash
+# After some LLM interactions
+curl -s "http://localhost:8000/api/history/search?q=component&limit=5" | python3 -m json.tool
+```
+
+**Expected:** Array of matching history entries.
+
+---
+
+## Test 12: Multiple Projects
+
+**Purpose:** Verify different projects have separate sessions.
+
+**Steps:**
+
+1. Load schematic from project A
+2. Verify `.hephaistus/` in project A
+3. Load schematic from project B (different path)
+4. Verify `.hephaistus/` in project B
+5. Check session status shows project B
+
+**Expected:** Each project has its own `.hephaistus/` directory and session.
+
+---
+
+## Test 13: Project Root Discovery
+
+**Purpose:** Verify project root discovery from schematic path.
+
+```bash
+# Test with schematic in subdirectory
+curl -s -X POST "http://localhost:8000/api/schematic/load?path=/path/to/project/subdir/schematic.kicad_sch" | python3 -m json.tool
+```
+
+**Expected:** `project_root` is the directory containing `.kicad_pro` or parent of schematic.
+
+---
+
+## Test 14: SPICE Library Loading
+
+**Purpose:** Verify SPICE libraries are loaded and included in context.
+
+**Prerequisites:**
+- Schematic with `Sim.Library` properties (e.g., `rectifier.kicad_sch` with IGBT)
+- `.lib` files in project directory
+
+**Steps:**
+
+1. Load schematic with SPICE library references:
+
+```bash
+curl -s -X POST "http://localhost:8000/api/schematic/load?path=/path/to/hephaistus/fixtures/schematics/rectifier.kicad_sch" | python3 -m json.tool
+```
+
+2. Check session status for SPICE libraries:
+
+```bash
+curl -s http://localhost:8000/api/session/status | python3 -m json.tool
+```
+
+**Expected:**
+```json
+{
+  "has_session": true,
+  "spice_libraries": [
+    {
+      "name": "FUJI_2MBI1500XYF170.lib",
+      "models": ["NMOS_MODEL", "FWD_MODEL"],
+      "subcircuits": ["2MBI1500XYF170"],
+      "token_estimate": 200
+    }
+  ]
+}
+```
+
+3. Verify context includes SPICE models:
+
+```bash
+curl -s -X POST http://localhost:8000/api/context/assemble \
+  -H "Content-Type: application/json" \
+  -d '{"request": "What SPICE models are defined?"}' | python3 -m json.tool
+```
+
+**Expected:** Context includes `### SPICE Models` section with complete library content (comments stripped).
+
+**Verify library content is complete:**
+- `.SUBCKT` definitions present
+- `.MODEL` statements present
+- Comment lines (starting with `*`) removed
+
+---
+
+## Test 15: Simulation Import
+
+**Purpose:** Verify simulation data can be imported from CSV and console output.
+
+**Prerequisites:**
+- Schematic loaded (Test 3)
+- CSV file exported from KiCad simulator
+- Console output copied from simulator window
+
+**Test 15a: Import from CSV only**
+
+```bash
+# Create a test CSV file
+cat > /tmp/test_transient.csv << 'EOF'
+time,V(out),I(R1)
+0.000,0.0,0.0
+0.001,5.2,0.052
+0.002,9.8,0.098
+0.003,12.1,0.121
+0.004,12.0,0.120
+EOF
+
+# Import simulation
+curl -s -X POST http://localhost:8000/api/simulation/import \
+  -H "Content-Type: application/json" \
+  -d '{
+    "csv_path": "/tmp/test_transient.csv",
+    "console_text": null
+  }' | python3 -m json.tool
+```
+
+**Expected:**
+```json
+{
+  "status": "imported",
+  "run_id": "...",
+  "analysis_type": "tran",
+  "converged": true,
+  "signal_count": 3,
+  "sample_count": 5
+}
+```
+
+**Test 15b: Import from console only**
+
+```bash
+curl -s -X POST http://localhost:8000/api/simulation/import \
+  -H "Content-Type: application/json" \
+  -d '{
+    "csv_path": null,
+    "console_text": "Circuit: * rectifier\nDoing analysis at TEMP = 27.000000\nReference   Value      Power    \nV1          12V       0.144W   \nR1          1k        0.0W     \n\nOperating point information:\nV(out) = 12.000000\nI(R1) = 0.012000"
+  }' | python3 -m json.tool
+```
+
+**Expected:**
+```json
+{
+  "status": "imported",
+  "run_id": "...",
+  "analysis_type": "op",
+  "converged": true,
+  "op_point_count": 2
+}
+```
+
+**Test 15c: Import from both CSV and console**
+
+```bash
+curl -s -X POST http://localhost:8000/api/simulation/import \
+  -H "Content-Type: application/json" \
+  -d '{
+    "csv_path": "/tmp/test_transient.csv",
+    "console_text": "Circuit: * rectifier\nTransient analysis...\nNo errors detected."
+  }' | python3 -m json.tool
+```
+
+---
+
+## Test 16: Simulation State Query
+
+**Purpose:** Verify simulation state endpoint returns imported data.
+
+```bash
+curl -s http://localhost:8000/api/simulation/state | python3 -m json.tool
+```
+
+**Expected:**
+```json
+{
+  "status": "current",
+  "last_run_id": "...",
+  "last_run_timestamp": "2026-08-21T...",
+  "analysis_type": "tran",
+  "converged": true,
+  "staleness_warning": null
+}
+```
+
+---
+
+## Test 17: Simulation Archive (FIFO)
+
+**Purpose:** Verify simulation history management.
+
+**Steps:**
+
+1. Import first simulation
+2. Import second simulation
+3. Check history directory
+
+```bash
+# Import simulation 1
+curl -s -X POST http://localhost:8000/api/simulation/import \
+  -H "Content-Type: application/json" \
+  -d '{"csv_path": "/tmp/test1.csv"}'
+
+# Import simulation 2
+curl -s -X POST http://localhost:8000/api/simulation/import \
+  -H "Content-Type: application/json" \
+  -d '{"csv_path": "/tmp/test2.csv"}'
+
+# Check history
+ls -la fixtures/schematics/.hephaistus/simulations/history/
+```
+
+**Expected:**
+- `current/` contains most recent simulation
+- `history/` contains previous simulation (timestamped folder)
+- Max 5 historical runs (older runs deleted)
+
+---
+
+## Test 18: Simulation Freshness Detection
+
+**Purpose:** Verify simulation staleness is detected when schematic changes.
+
+**Note:** Staleness detection works within the SAME project. Loading a different project creates a new session (simulation state = "none").
+
+**Test 18a: Same-project staleness**
+
+```bash
+# Step 1: Load schematic and import simulation
+curl -s -X POST "http://localhost:8000/api/schematic/load?path=/path/to/project/schematic.kicad_sch"
+curl -s -X POST http://localhost:8000/api/simulation/import \
+  -H "Content-Type: application/json" \
+  -d '{"csv_path": "/tmp/test.csv"}'
+
+# Step 2: Verify simulation is current
+curl -s http://localhost:8000/api/simulation/state | python3 -m json.tool
+# Expected: "status": "current"
+
+# Step 3: Simulate schematic modification by reloading with external change
+# (In practice, this would be KiCad saving the file, changing its hash)
+# For testing, we can manually modify the file:
+echo "# Modified" >> /path/to/project/schematic.kicad_sch
+
+# Step 4: Reload schematic
+curl -s -X POST "http://localhost:8000/api/schematic/load?path=/path/to/project/schematic.kicad_sch"
+
+# Step 5: Check simulation state - should be stale
+curl -s http://localhost:8000/api/simulation/state | python3 -m json.tool
+```
+
+**Expected:**
+```json
+{
+  "status": "stale",
+  "staleness_warning": "Schematic modified after last simulation (hash changed: abc12345 → def67890)"
+}
+```
+
+**Test 18b: Different project resets simulation**
+
+```bash
+# Load project A with simulation
+curl -s -X POST "http://localhost:8000/api/schematic/load?path=/path/to/projectA/schematic.kicad_sch"
+curl -s -X POST http://localhost:8000/api/simulation/import -d '{"csv_path": "/tmp/test.csv"}'
+
+# Load project B (different project)
+curl -s -X POST "http://localhost:8000/api/schematic/load?path=/path/to/projectB/schematic.kicad_sch"
+
+# Check simulation state - should be "none" (new session)
+curl -s http://localhost:8000/api/simulation/state | python3 -m json.tool
 ```
 
 **Expected:**
@@ -121,291 +557,210 @@ curl http://localhost:8000/api/simulation/state
 }
 ```
 
----
-
-### Test 5: Assemble Context (Debug)
-
-**Purpose:** Verify context assembly works without LLM.
-
-**Steps:**
-```bash
-curl -X POST http://localhost:8000/api/context/assemble \
-  -H "Content-Type: application/json" \
-  -d '{"request": "Add a snubber circuit across D1"}'
-```
-
-**Expected:**
-```json
-{
-  "session_id": "...",
-  "total_tokens": <number>,
-  "layers": {
-    "system": "...",
-    "session": "...",
-    ...
-  },
-  "prompt": "..."
-}
-```
+**Explanation:** Loading a different project creates a NEW session (separate `.hephaistus/` directory). This is correct behavior - simulation staleness only applies within the same project.
 
 ---
 
-### Test 6: LLM Generation (Ollama - Local)
+## Test 19: SPICE Library Context in LLM Query
 
-**Prerequisites:**
-- Ollama running: `ollama serve`
-- Model pulled: `ollama pull llama3.1:70b` (or `llama3.1:8b` for faster testing)
+**Purpose:** Verify LLM can see SPICE model topology.
 
-**Steps:**
 ```bash
-curl -X POST http://localhost:8000/api/llm/generate \
+curl -s -X POST http://localhost:8000/api/llm/generate \
   -H "Content-Type: application/json" \
   -d '{
-    "request": "Add a snubber circuit across D1",
+    "request": "In the FUJI IGBT library, is the freewheeling diode antiparallel to the switch? Explain the connection.",
     "provider": "ollama",
-    "model": "llama3.1:8b"
-  }'
+    "model": "gemma4:e4b"
+  }' | python3 -m json.tool
 ```
 
-**Expected:**
-```json
-{
-  "raw_response": "...",
-  "patch_plan": {...} or null,
-  "is_clarification": false,
-  "is_valid": true
-}
-```
+**Expected:** Response references:
+- Diode D1 between E and C (Emitter and Collector)
+- Confirms antiparallel connection
+- May mention internal gate resistor Rg
 
-**Note:** First run may be slow (model loading). Subsequent runs are faster.
+**Example response excerpt:**
+> "Yes, the freewheeling diode (D1) is connected between E and C, making it antiparallel to the main IGBT switch (M1). The subcircuit shows: D1 E C FWD_MODEL..."
 
 ---
 
-### Test 7: LLM Generation (OpenRouter - Cloud)
+## Test 20: Archive Persistence
 
-**Prerequisites:**
-- `OPENROUTER_API_KEY` environment variable set
+**Purpose:** Verify simulation archives persist across server restart.
 
 **Steps:**
+
+1. Import simulation (Test 15)
+2. Stop server
+3. Start server
+4. Restore session
+5. Check history directory
+
 ```bash
-curl -X POST http://localhost:8000/api/llm/generate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "request": "Add a snubber circuit across D1",
-    "provider": "openrouter",
-    "model": "anthropic/claude-3.5-sonnet"
-  }'
+# After importing
+ls -la fixtures/schematics/.hephaistus/simulations/
+
+# Stop server
+pkill -f "uvicorn api.server:app"
+
+# Restart
+uvicorn api.server:app --host 127.0.0.1 --port 8000 &
+
+# Restore session
+curl -s -X POST http://localhost:8000/api/session/restore | python3 -m json.tool
+
+# Check history persists
+ls -la fixtures/schematics/.hephaistus/simulations/history/
 ```
 
-**Expected:**
-```json
-{
-  "raw_response": "...",
-  "patch_plan": {...},
-  "reasoning": "...",
-  "is_valid": true
-}
-```
-
----
-
-### Test 8: Frontend - Session Status Display
-
-**Purpose:** Verify frontend shows schematic/simulation status.
-
-**Steps:**
-1. Open http://localhost:3000 in browser
-2. Observe SessionStatus component in left sidebar
-
-**Expected:**
-```
-┌─────────────────────────────────────┐
-│ Schematic                           │
-│ ● rectifier.kicad_sch               │
-│   saved                              │
-│   10 components, 5 nets             │
-│                                      │
-│ Simulation                           │
-│ ○ No simulation                      │
-│                                      │
-│ Workflow                             │
-│ 1. Save ✓                            │
-│ 2. Sim                               │
-│ 3. Prompt ✓                          │
-└─────────────────────────────────────┘
-```
-
----
-
-### Test 9: Frontend - Chat Input (No Schematic)
-
-**Purpose:** Verify pre-prompt guard blocks input without schematic.
-
-**Steps:**
-1. Stop backend server (Ctrl+C)
-2. Restart without loading schematic
-3. Open http://localhost:3000
-
-**Expected:**
-- Yellow warning panel: "Save required before prompting"
-- Text input disabled (grayed out)
-- Send button disabled
-
----
-
-### Test 10: Frontend - Chat Submission
-
-**Prerequisites:**
-- Schematic loaded (Test 2)
-- LLM available (Ollama or OpenRouter)
-
-**Steps:**
-1. Open http://localhost:3000 in browser
-2. Type in chat: "Add a snubber circuit across D1"
-3. Click "Send"
-
-**Expected:**
-- Button shows "Thinking..." while processing
-- Response appears in chat area
-- No error messages
-
----
-
-### Test 11: History Search
-
-**Purpose:** Verify FTS5 history search works.
-
-**Steps:**
-```bash
-# First, generate some history (run Test 10 multiple times)
-curl "http://localhost:8000/api/history/search?q=snubber&limit=5"
-```
-
-**Expected:**
-```json
-{
-  "entries": [
-    {
-      "id": "...",
-      "user_request": "Add a snubber circuit...",
-      "relevance_score": 0.8,
-      ...
-    }
-  ]
-}
-```
-
----
-
-### Test 12: History Recent
-
-**Purpose:** Verify recent history retrieval.
-
-**Steps:**
-```bash
-curl "http://localhost:8000/api/history/recent?limit=10"
-```
-
-**Expected:**
-```json
-{
-  "entries": [
-    {
-      "id": "...",
-      "timestamp": "...",
-      "user_request": "...",
-      "reasoning_summary": "..."
-    }
-  ]
-}
-```
-
----
-
-## Integration Test Matrix
-
-| Test | Backend | Frontend | LLM Required |
-|------|---------|----------|--------------|
-| 1. Health check | ✅ | - | No |
-| 2. Load schematic | ✅ | - | No |
-| 3. Schematic state | ✅ | ✅ | No |
-| 4. Simulation state | ✅ | ✅ | No |
-| 5. Context assemble | ✅ | - | No |
-| 6. LLM (Ollama) | ✅ | - | Yes (local) |
-| 7. LLM (OpenRouter) | ✅ | - | Yes (API key) |
-| 8. Frontend status | - | ✅ | No |
-| 9. Frontend guard | - | ✅ | No |
-| 10. Chat submission | ✅ | ✅ | Yes |
-| 11. History search | ✅ | - | No |
-| 12. History recent | ✅ | - | No |
+**Expected:** History folders persist after restart.
 
 ---
 
 ## Troubleshooting
 
-### Backend won't start
+### Server won't start
+
 ```bash
+# Check for port conflicts
+lsof -i :8000
+
 # Check Python dependencies
-source .venv/bin/activate
-pip install -e ".[all]"
-
-# Check for import errors
-python -c "from api.server import app; print('OK')"
+pip install -e .
+pip install python-dotenv
 ```
 
-### Frontend won't start
+### OpenRouter API errors
+
 ```bash
-# Clear node_modules and reinstall
-cd companion
-rm -rf node_modules package-lock.json
-npm install
+# Verify API key is loaded
+cat .env | grep OPENROUTER
+
+# Test API key directly
+curl -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+  https://openrouter.ai/api/v1/models
 ```
 
-### Ollama not found
+### Ollama connection errors
+
 ```bash
-# Install Ollama
-brew install ollama  # macOS
-# or download from https://ollama.ai
+# Verify Ollama is running
+curl http://localhost:11434/api/tags
 
-# Start server
-ollama serve
-
-# Pull model
-ollama pull llama3.1:8b
+# Pull required model
+ollama pull gemma4:e4b
 ```
 
-### OpenRouter API key issues
-```bash
-# Verify key is set
-echo $OPENROUTER_API_KEY
+### Session not persisting
 
-# Test directly
-curl https://openrouter.ai/api/v1/chat/completions \
-  -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+```bash
+# Check permissions
+ls -la fixtures/schematics/.hephaistus/
+
+# Check for errors in server log
+tail -20 /tmp/hephaistus.log
+```
+
+---
+
+## Test Summary Template
+
+| Test | Status | Notes |
+|------|--------|-------|
+| 1. Health Check | ⬜ | |
+| 2. Empty Session | ⬜ | |
+| 3. Load Schematic | ⬜ | |
+| 4. Session Status | ⬜ | |
+| 5. Schematic State | ⬜ | |
+| 6. LLM Query (Ollama) | ⬜ | |
+| 7. LLM Query (OpenRouter) | ⬜ | |
+| 8. Clarification Flow | ⬜ | |
+| 9. Session Persistence | ⬜ | |
+| 10. Context Assembly | ⬜ | |
+| 11. History Search | ⬜ | |
+| 12. Multiple Projects | ⬜ | |
+| 13. Project Root Discovery | ⬜ | |
+| 14. SPICE Library Loading | ⬜ | |
+| 15. Simulation Import | ⬜ | |
+| 16. Simulation State Query | ⬜ | |
+| 17. Simulation Archive (FIFO) | ⬜ | |
+| 18. Simulation Freshness | ⬜ | |
+| 19. SPICE Library in LLM | ⬜ | |
+| 20. Archive Persistence | ⬜ | |
+
+---
+
+## Next Steps
+
+After passing these tests:
+
+1. **Companion UI Tests** — Test React frontend integration
+2. **End-to-End Tests** — Full workflow from schematic load to patch application
+3. **Simulation Import UI** — Test ImportSimulationDialog component
+4. **History Tests** — Verify FTS5 search and statistics
+
+## Test Fixtures
+
+Create test fixtures for simulation tests:
+
+```bash
+# Create test CSV
+cat > fixtures/simulations/test_transient.csv << 'EOF'
+time,V(out),I(R1)
+0.000,0.0,0.0
+0.001,5.2,0.052
+0.002,9.8,0.098
+0.003,12.1,0.121
+0.004,12.0,0.120
+EOF
+
+# Create test console output
+cat > fixtures/simulations/test_console.txt << 'EOF'
+Circuit: * rectifier
+Doing analysis at TEMP = 27.000000
+Reference   Value      Power
+V1          12V       0.144W
+R1          1k        0.0W
+
+Operating point information:
+V(out) = 12.000000
+I(R1) = 0.012000
+EOF
+```
+
+## Automated Test Script
+
+Run all tests with a single script:
+
+```bash
+#!/bin/bash
+# test-api.sh - Run all API tests
+
+BASE_URL="http://localhost:8000"
+SCHEMATIC="/path/to/hephaistus/fixtures/schematics/rectifier.kicad_sch"
+
+# Test 1: Health Check
+echo "Test 1: Health Check"
+curl -s $BASE_URL/ | python3 -m json.tool
+
+# Test 3: Load Schematic
+echo "Test 3: Load Schematic"
+curl -s -X POST "$BASE_URL/api/schematic/load?path=$SCHEMATIC" | python3 -m json.tool
+
+# Test 14: SPICE Libraries
+echo "Test 14: SPICE Libraries"
+curl -s $BASE_URL/api/session/status | python3 -m json.tool | grep -A5 spice_libraries
+
+# Test 15: Import Simulation
+echo "Test 15: Import Simulation"
+curl -s -X POST $BASE_URL/api/simulation/import \
   -H "Content-Type: application/json" \
-  -d '{"model": "anthropic/claude-3.5-sonnet", "messages": [{"role": "user", "content": "Hi"}]}'
+  -d '{"csv_path": "fixtures/simulations/test_transient.csv"}' | python3 -m json.tool
+
+# Test 16: Simulation State
+echo "Test 16: Simulation State"
+curl -s $BASE_URL/api/simulation/state | python3 -m json.tool
+
+echo "All tests completed."
 ```
-
-### CORS errors in browser
-- Backend has CORS enabled for `localhost:3000` and `localhost:5173`
-- Check browser console for specific error
-- Verify backend is running on port 8000
-
----
-
-## Success Criteria
-
-- All Tests 1-5 pass (core functionality)
-- At least one of Tests 6-7 passes (LLM integration)
-- Frontend displays correctly (Tests 8-9)
-- End-to-end flow works (Test 10)
-
----
-
-## Next Steps After Testing
-
-1. **File Watcher:** Implement `.kicad_sch` file watching for automatic reload
-2. **KiCad Integration:** Test with actual KiCad workflow (save → reload)
-3. **Tauri Packaging:** Package as desktop app for KiCad integration
-4. **Error Handling:** Add user-friendly error messages in UI
-5. **Streaming:** Implement streaming responses for better UX

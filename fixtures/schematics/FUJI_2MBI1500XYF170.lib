@@ -1,0 +1,32 @@
+* SPICE Subcircuit for 1/2 of Fuji 2MBI1500XYF170-50 (Ngspice Compatible)
+* Pins: Collector (C), Gate (G), Emitter (E)
+.SUBCKT 2MBI1500XYF170 C G E
+
+* Internal Gate Resistor
+Rg G G_int 0.67
+
+* Main Switch Component (Using ngspice-compatible NMOS primitive)
+M1 C G_int E E NMOS_MODEL 
+
+* Explicit Parasitic Capacitances
+Cge G_int E 184.65n  ; Gate-Emitter Cap (Cies - Cres = 185n - 0.35n)
+Cgc G_int C 0.35n    ; Gate-Collector Cap (Miller / Cres)
+Cce C E 11.15n       ; Collector-Emitter Cap (Coes - Cres = 11.5n - 0.35n)
+
+* Antiparallel Freewheeling Diode (FWD)
+D1 E C FWD_MODEL
+
+* --- DATASHEET PARAMETERS ---
+.MODEL NMOS_MODEL NMOS(
++ VTO=6.5             ; Threshold voltage
++ KP=100              ; Transconductance (approximated for high current)
++ )
+
+.MODEL FWD_MODEL D(
++ BV=1700             ; Diode breakdown voltage
++ IS=1E-9             ; Saturation current
++ N=1.5               ; Emission coefficient 
++ RS=0.0004           ; Ohmic resistance
++ )
+
+.ENDS 2MBI1500XYF170

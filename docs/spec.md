@@ -83,6 +83,14 @@ The backend should progressively support these inputs:
 - project libraries
 - schematic version/generator metadata
 
+### Project-scoped session
+
+- `.hephaistus/session.json` — Session state persisted in project directory
+- `.hephaistus/history.db` — Project-scoped conversation history (SQLite/FTS5)
+- `.hephaistus/simulations/` — Simulation run metadata and results
+- Auto-discovery of project root from schematic path
+- Session survives server restarts
+
 ### Validation
 
 - `kicad-cli sch erc` output
@@ -191,6 +199,7 @@ Preferred near-term interfaces:
 
 - **KiCad ingestion (2026-07-18):** Extension activation, file watcher, Python/KiUtils path resolution, KiCad 10 parsing, JSON state generation.
 - **Stub-based net restructuring (2026-08-04):** Full apply flow with 26/26 tests passing. Operations include: no-op, series insertion, chained splits, parallel additions, component embedding (Device:L), and duplicate-UUID abort. kicad-cli ERC validates zero new violations vs fixture baseline.
+- **Session persistence (2026-08-21):** Project-scoped sessions in `.hephaistus/` directory. Auto-discovery of project root. Session state survives server restarts. Shared context service for LLM requests.
 
 ### In progress
 

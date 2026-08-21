@@ -31,6 +31,8 @@ The old implementation remains available for reference but is not part of the ne
 
 ## Implementation progress
 
+## Implementation progress
+
 ### Completed
 
 1. **KiCad ingestion (2026-07-18):** Extension activation, file watcher, Python/KiUtils path resolution, KiCad 10 parsing, JSON state generation. Tested with `rectifier.kicad_sch` (9 components, 5 nets).
@@ -46,11 +48,18 @@ The old implementation remains available for reference but is not part of the ne
    - **Test status:** 26/26 tests passing (no-op, series insertion, chained splits, parallel additions, RL chain with Device:L embedding, duplicate-UUID abort)
    - **Validation:** kicad-cli ERC confirms zero new violations vs fixture baseline
 
+3. **Session persistence (2026-08-21):**
+   - Project-scoped sessions in `<project>/.hephaistus/`
+   - Auto-discovery of project root from schematic path
+   - Shared ContextService between API and LLM orchestrator
+   - Session survives server restarts
+   - API endpoints: `/api/session/status`, `/api/session/restore`
+
 ### In progress
 
-3. Deterministic backend package — core operations implemented, extending coverage
+4. Deterministic backend package — core operations implemented, extending coverage
 
-4. **Simulation context pipeline (2026-08-20 — in progress)**
+5. **Simulation context pipeline (2026-08-20 — in progress)**
    - `backend/hephaistus_simulation/` — new module
    - Console output parsing (analyses, convergence, warnings, errors) ✅
    - DC operating points extraction ✅
@@ -60,11 +69,11 @@ The old implementation remains available for reference but is not part of the ne
    - CLI commands for testing ✅
    - Test fixtures in `fixtures/simulation/` ✅
 
-5. Companion chat UI
+6. Companion chat UI
 
 ### Future
 
-6. Optional KiCad IPC adapter when schematic support matures
+7. Optional KiCad IPC adapter when schematic support matures
 
 ## Key technical decisions
 
