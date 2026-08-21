@@ -1,6 +1,6 @@
 # HephAIstus Context
 
-Last updated: 2026-08-20
+Last updated: 2026-08-22
 
 ## Project
 
@@ -31,8 +31,6 @@ The old implementation remains available for reference but is not part of the ne
 
 ## Implementation progress
 
-## Implementation progress
-
 ### Completed
 
 1. **KiCad ingestion (2026-07-18):** Extension activation, file watcher, Python/KiUtils path resolution, KiCad 10 parsing, JSON state generation. Tested with `rectifier.kicad_sch` (9 components, 5 nets).
@@ -45,7 +43,7 @@ The old implementation remains available for reference but is not part of the ne
    - Library embedding: auto-embed from sym-lib-table resolution
    - Instance format fix: new components emit proper `(pin N (uuid ...))` and `(instances ...)` blocks
    - Net coverage fix: multiple disjoint stub islands per net name supported
-   - **Test status:** 26/26 tests passing (no-op, series insertion, chained splits, parallel additions, RL chain with Device:L embedding, duplicate-UUID abort)
+   - **Test status:** 26/26 tests passing
    - **Validation:** kicad-cli ERC confirms zero new violations vs fixture baseline
 
 3. **Session persistence (2026-08-21):**
@@ -55,25 +53,37 @@ The old implementation remains available for reference but is not part of the ne
    - Session survives server restarts
    - API endpoints: `/api/session/status`, `/api/session/restore`
 
+4. **Simulation ingestion pipeline (2026-08-22):**
+   - CSV file parsing with waveform statistics
+   - Console output parsing (ngspice format)
+   - Analysis type detection (tran, ac, dc, op)
+   - FIFO archive (keeps last 5 runs)
+   - Staleness detection via schematic hash comparison
+   - API endpoints: `/api/simulation/import`, `/api/simulation/state`
+
+5. **SPICE library context (2026-08-22):**
+   - Extract `Sim.Library` properties from components
+   - Load complete .lib files (comments stripped)
+   - Expose subcircuits and models to LLM context
+   - Enable topology reasoning (antiparallel diode detection verified)
+
+6. **LLM orchestration (2026-08-21):**
+   - Unified provider interface (Ollama, OpenRouter)
+   - Patch-plan JSON extraction from responses
+   - Context assembly with token budget
+   - History persistence to SQLite
+
 ### In progress
 
-4. Deterministic backend package — core operations implemented, extending coverage
-
-5. **Simulation context pipeline (2026-08-20 — in progress)**
-   - `backend/hephaistus_simulation/` — new module
-   - Console output parsing (analyses, convergence, warnings, errors) ✅
-   - DC operating points extraction ✅
-   - Raw waveform parsing ✅
-   - Run metadata with schematic correlation ✅
-   - LLM context assembly ✅
-   - CLI commands for testing ✅
-   - Test fixtures in `fixtures/simulation/` ✅
-
-6. Companion chat UI
+7. **Companion UI (Phase 4):** React + Tauri desktop app
+   - Import Simulation Dialog
+   - Session Status Panel
+   - LLM Chat Interface
+   - Patch Plan Review
 
 ### Future
 
-7. Optional KiCad IPC adapter when schematic support matures
+8. Optional KiCad IPC adapter when schematic support matures
 
 ## Key technical decisions
 
