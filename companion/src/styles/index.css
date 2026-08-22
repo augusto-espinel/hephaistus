@@ -1131,3 +1131,32 @@ button.modify {
   font-size: 0.8rem;
   overflow-x: auto;
 }
+/* Context Inspector Auto-refresh */
+.refresh-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: rgba(0, 200, 100, 0.1);
+  border: 1px solid rgba(0, 200, 100, 0.3);
+  border-radius: 0.25rem;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  color: #0c6;
+}
+
+.refresh-icon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.result-panel {
+  margin-top: 1rem;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 0.5rem;
+  padding: 1rem;
+}

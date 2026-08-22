@@ -44,7 +44,11 @@ app = FastAPI(
 # CORS for frontend development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -593,7 +597,7 @@ async def generate_patch_plan(request: GenerateRequest):
         )
     else:
         config = ProviderConfig.ollama(
-            model=request.model or "llama3.1:70b",
+            model=request.model or "gemma4:e4b",
         )
     
     # Create orchestrator with shared context service
@@ -743,6 +747,26 @@ async def get_history_stats(session: Optional[str] = None):
     store = get_history_store()
     stats = store.get_statistics(session_id=session)
     return stats
+
+
+@app.get("/api/debug/last-prompt")
+async def get_last_prompt():
+    """
+    Get the last assembled prompt+context for debugging.
+    
+    Returns the contents of .hephaistus/last_prompt.json from the current project.
+    """
+    global _project_root
+    if not _project_root:
+        raise HTTPException(status_code=404, detail="No project loaded")
+    
+    debug_file = _project_root / '.hephaistus' / 'last_prompt.json'
+    if not debug_file.exists():
+        raise HTTPException(status_code=404, detail="No last prompt file found")
+    
+    import json
+    with open(debug_file) as f:
+        return json.load(f)
 
 
 # Development server entry point

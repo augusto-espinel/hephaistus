@@ -112,6 +112,40 @@ class LLMOrchestrator:
         # Initialize provider
         self._provider = self._create_provider()
     
+    def _save_last_prompt(self, context_result, messages, user_request):
+        """
+        Save last prompt+context to file for debugging.
+        
+        Written to <project>/.hephaistus/last_prompt.json, overwritten each call.
+        """
+        import json
+        from pathlib import Path
+        
+        # Get project root from context service
+        project_root = getattr(self.context_service.session, 'project_root', None)
+        if not project_root:
+            return  # No project loaded, skip
+        
+        debug_file = Path(project_root) / '.hephaistus' / 'last_prompt.json'
+        debug_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Build debug payload
+        payload = {
+            'timestamp': context_result.assembled_at.isoformat() if context_result.assembled_at else None,
+            'user_request': user_request,
+            'total_tokens': context_result.total_tokens,
+            'budget_summary': context_result.budget.summary() if context_result.budget else None,
+            'messages': [
+                {'role': m.role.value, 'content': m.content}
+                for m in messages
+            ],
+            'assembled_context': context_result.prompt,
+            'layers': context_result.layers,
+        }
+        
+        with open(debug_file, 'w') as f:
+            json.dump(payload, f, indent=2)
+    
     def _create_provider(self):
         """Create the appropriate LLM provider."""
         provider_type = self.provider_config.provider
@@ -173,6 +207,9 @@ class LLMOrchestrator:
             Message(role=MessageRole.SYSTEM, content=self.system_prompt),
             Message(role=MessageRole.USER, content=context_result.prompt),
         ]
+        
+        # Debug: write last prompt to file for inspection
+        self._save_last_prompt(context_result, messages, user_request)
         
         # Build LLM config
         llm_config = LLMConfig(

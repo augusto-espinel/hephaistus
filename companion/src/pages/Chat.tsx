@@ -6,6 +6,7 @@ import { useSchematic } from '@/hooks/useSchematic'
 import { SessionStatus } from '@/components/SessionStatus'
 import { ImportSimulationDialog } from '@/components/ImportSimulationDialog'
 import { LoadSchematicDialog } from '@/components/LoadSchematicDialog'
+import { emit, Events } from '@/events'
 
 export function Chat() {
   const [request, setRequest] = useState('')
@@ -56,6 +57,9 @@ export function Chat() {
       request: request.trim(),
       provider: 'ollama', // Default to local
     })
+    
+    // Signal Context Inspector to refresh
+    emit(Events.PROMPT_SENT)
   }
 
   const handleImportSimulation = async (csvPath: string | null, consoleText: string | null) => {
@@ -66,11 +70,13 @@ export function Chat() {
     // Refresh both session and simulation state
     refreshSession()
     refreshSimState()
+    emit(Events.SIMULATION_IMPORTED)
   }
 
   const handleLoadSchematic = async (path: string) => {
     await loadSchematic(path)
     refreshSession()
+    emit(Events.SCHEMATIC_LOADED)
   }
 
   return (

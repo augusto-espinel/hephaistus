@@ -66,7 +66,7 @@ class ProviderConfig:
     @classmethod
     def ollama(
         cls,
-        model: str = "llama3.1:70b",
+        model: str = "gemma4:e4b",
         base_url: str = "http://localhost:11434",
         temperature: float = 0.7,
         max_tokens: int = 4096,
@@ -142,11 +142,11 @@ DEFAULT_CONFIGS = {
         temperature=0.7,
     ),
     "ollama_local": ProviderConfig.ollama(
-        model="llama3.1:70b",
+        model="gemma4:e4b",
         base_url="http://localhost:11434",
     ),
     "ollama_remote": ProviderConfig.ollama(
-        model="llama3.1:70b",
+        model="gemma4:e4b",
         base_url="${OLLAMA_HOST}",
     ),
     "openai_gpt4": ProviderConfig.openai(

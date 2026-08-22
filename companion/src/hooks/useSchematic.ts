@@ -14,8 +14,10 @@ export interface LoadSchematicResponse {
 export function useSchematic() {
   const { data, loading, error, execute } = useApi<LoadSchematicResponse>()
 
-  const load = useCallback(async (schematicPath: string) => {
-    await execute(`/api/schematic/load?path=${encodeURIComponent(schematicPath)}`)
+  const load = useCallback(async (schematicPath: string): Promise<LoadSchematicResponse> => {
+    return execute(`/api/schematic/load?path=${encodeURIComponent(schematicPath)}`, {
+      method: 'POST',
+    })
   }, [execute])
 
   return {
