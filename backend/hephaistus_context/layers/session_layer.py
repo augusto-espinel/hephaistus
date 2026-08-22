@@ -11,6 +11,43 @@ from typing import Optional
 from ..session_state import SessionState, UserDirectives, ExpertiseLevel
 
 
+def format_engineering(value_str: str) -> str:
+    """
+    Convert scientific notation to engineering notation for LLM readability.
+    
+    Examples:
+        34e-3 → 34m
+        22.5e-3 → 22.5m
+        90e3 → 90k
+        1.89e-3 → 1.89m
+        0.022 → 22m
+    """
+    if not value_str:
+        return value_str
+    
+    try:
+        val = float(value_str)
+        abs_val = abs(val)
+        if abs_val >= 1e6:
+            return f"{val/1e6:.3g}M"
+        elif abs_val >= 1e3:
+            return f"{val/1e3:.3g}k"
+        elif abs_val >= 1:
+            return f"{val:.3g}"
+        elif abs_val >= 1e-3:
+            return f"{val*1e3:.3g}m"
+        elif abs_val >= 1e-6:
+            return f"{val*1e6:.3g}µ"
+        elif abs_val >= 1e-9:
+            return f"{val*1e9:.3g}n"
+        elif abs_val >= 1e-12:
+            return f"{val*1e12:.3g}p"
+        else:
+            return f"{val:.2e}"
+    except (ValueError, TypeError):
+        return value_str
+
+
 class SessionLayer:
     """
     Layer 1: Dynamic session state context.
@@ -48,7 +85,8 @@ class SessionLayer:
                 value = c.get("value", "")
                 # Format: R1 (Device:R) - 10k
                 if value:
-                    lines.append(f"- {ref} ({lib_id}): {value}")
+                    formatted_value = format_engineering(str(value))
+                    lines.append(f"- {ref} ({lib_id}): {formatted_value}")
                 else:
                     lines.append(f"- {ref} ({lib_id})")
                 
