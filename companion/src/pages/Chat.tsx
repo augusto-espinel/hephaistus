@@ -7,6 +7,7 @@ import { useAppState } from '@/context/AppContext'
 import { SessionStatus } from '@/components/SessionStatus'
 import { ImportSimulationDialog } from '@/components/ImportSimulationDialog'
 import { LoadSchematicDialog } from '@/components/LoadSchematicDialog'
+import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import { emit, Events } from '@/events'
 
 export function Chat() {
@@ -138,7 +139,7 @@ export function Chat() {
           {displayResponse?.raw_response && (
             <div className="message assistant">
               <div className="message-content">
-                {displayResponse.raw_response}
+                <MarkdownRenderer content={displayResponse.raw_response} />
               </div>
               {displayResponse.patch_plan && (
                 <div className="patch-plan-preview">
