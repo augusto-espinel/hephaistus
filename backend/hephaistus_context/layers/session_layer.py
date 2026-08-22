@@ -6,7 +6,7 @@ Refreshed on every request.
 """
 
 import json
-from typing import Optional
+from typing import Dict, Optional
 
 from ..session_state import SessionState, UserDirectives, ExpertiseLevel
 
@@ -59,6 +59,30 @@ class SessionLayer:
     def __init__(self, session: SessionState):
         self.session = session
     
+    def _find_subcircuit_for_component(self, lib_id: str) -> Optional[str]:
+        """
+        Find matching subcircuit name for a component's lib_id.
+        
+        Components like 'Traction_Power_Components:2MBI1500XYF170_Switch' 
+        map to subcircuit '2MBI1500XYF170' in loaded libraries.
+        
+        Returns subcircuit name if found, None otherwise.
+        """
+        # Extract the core symbol name from lib_id (after colon, before underscore suffix)
+        if ':' in lib_id:
+            symbol_name = lib_id.split(':')[1]
+        else:
+            symbol_name = lib_id
+        
+        # Try to match against loaded subcircuits
+        for lib in self.session.spice_libraries:
+            for subckt in lib.subcircuits:
+                # Check if subcircuit name appears in the symbol name
+                if subckt in symbol_name:
+                    return subckt
+        
+        return None
+
     def generate(self) -> str:
         """
         Generate the session state context string.
@@ -67,6 +91,16 @@ class SessionLayer:
             Formatted session state for LLM prompt
         """
         lines = ["## Current Session State"]
+        
+        # Build component-to-subcircuit mapping for cross-reference
+        component_subcircuits: Dict[str, str] = {}
+        if self.session.spice_libraries:
+            for c in self.session.schematic.components[:50]:
+                lib_id = c.get("lib_id", "")
+                subckt = self._find_subcircuit_for_component(lib_id)
+                if subckt:
+                    ref = c.get("reference", "")
+                    component_subcircuits[ref] = subckt
         
         # Schematic summary
         lines.append("### Schematic")
@@ -105,6 +139,10 @@ class SessionLayer:
                             pin_strs.append(f"{pin_num}→{net_name}")
                     if pin_strs:
                         lines.append(f"  Pins: {', '.join(pin_strs)}")
+                
+                # Add subcircuit cross-reference if available
+                if ref in component_subcircuits:
+                    lines.append(f"  → Subcircuit: {component_subcircuits[ref]} (see SPICE Models below)")
             
             if sch.component_count > 50:
                 lines.append(f"  ... and {sch.component_count - 50} more")
