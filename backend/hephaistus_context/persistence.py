@@ -136,6 +136,17 @@ class SessionPersistence:
                 },
                 "directives": session.directives.to_dict(),
                 "pending_patch_plan": session.pending_patch_plan,
+                "spice_libraries": [
+                    {
+                        "name": lib.name,
+                        "path": lib.path,
+                        "content": lib.content,
+                        "models": lib.models,
+                        "subcircuits": lib.subcircuits,
+                        "token_estimate": lib.token_estimate,
+                    }
+                    for lib in session.spice_libraries
+                ],
             },
             "history": history.export() if history else {},
             "reasoning": reasoning.export() if reasoning else {},
@@ -201,6 +212,19 @@ class SessionPersistence:
             target_metrics=directives_data.get("target_metrics", ["performance"]),
         )
         
+        # Reconstruct SPICE libraries
+        from .session_state import SpiceLibraryInfo
+        spice_libraries = []
+        for lib_data in session_data.get("spice_libraries", []):
+            spice_libraries.append(SpiceLibraryInfo(
+                name=lib_data.get("name", ""),
+                path=lib_data.get("path", ""),
+                content=lib_data.get("content", ""),
+                models=lib_data.get("models", []),
+                subcircuits=lib_data.get("subcircuits", []),
+                token_estimate=lib_data.get("token_estimate", 0),
+            ))
+        
         return SessionState(
             session_id=session_data.get("session_id", ""),
             project_root=session_data.get("project_root", ""),
@@ -210,6 +234,7 @@ class SessionPersistence:
             simulation=simulation,
             directives=directives,
             pending_patch_plan=session_data.get("pending_patch_plan"),
+            spice_libraries=spice_libraries,
         )
     
     def has_session(self) -> bool:
