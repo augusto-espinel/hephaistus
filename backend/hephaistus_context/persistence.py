@@ -117,6 +117,9 @@ class SessionPersistence:
                     "component_count": session.schematic.component_count,
                     "net_count": session.schematic.net_count,
                     "last_modified": self._serialize_datetime(session.schematic.last_modified),
+                    "components": session.schematic.components[:100],  # Limit for file size
+                    "nets": session.schematic.nets[:50],  # Limit for file size
+                    "directives": session.schematic.directives,
                 },
                 "simulation": {
                     "status": session.simulation.status.value,
@@ -161,6 +164,9 @@ class SessionPersistence:
             last_modified=self._deserialize_datetime(
                 session_data.get("schematic", {}).get("last_modified")
             ),
+            components=session_data.get("schematic", {}).get("components", []),
+            nets=session_data.get("schematic", {}).get("nets", []),
+            directives=session_data.get("schematic", {}).get("directives", []),
         )
         
         simulation = SimulationState(

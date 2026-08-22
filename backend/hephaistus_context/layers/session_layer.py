@@ -71,18 +71,24 @@ class SessionLayer:
             if sch.component_count > 50:
                 lines.append(f"  ... and {sch.component_count - 50} more")
         
-        # Net list (summarized)
+        # Net list (with pin membership)
         if sch.nets:
             lines.append("")
             lines.append("#### Nets")
-            for n in sch.nets[:20]:  # Limit
+            for n in sch.nets[:30]:  # Limit
                 name = n.get("name", "?")
-                pins = n.get("pins", [])
-                pin_count = len(pins) if isinstance(pins, list) else 0
-                lines.append(f"- {name}: {pin_count} pins")
+                # Use connectedPins from parser if available
+                connected = n.get("connectedPins", n.get("pins", []))
+                if isinstance(connected, list) and len(connected) > 0:
+                    # Show pin list for nets with connections
+                    pin_str = ', '.join(str(p) for p in connected[:10])
+                    extra = f" +{len(connected)-10} more" if len(connected) > 10 else ""
+                    lines.append(f"- {name}: {len(connected)} pins ({pin_str}{extra})")
+                else:
+                    lines.append(f"- {name}")
             
-            if sch.net_count > 20:
-                lines.append(f"  ... and {sch.net_count - 20} more")
+            if sch.net_count > 30:
+                lines.append(f"  ... and {sch.net_count - 30} more")
         
         # Simulation directives
         if sch.directives:

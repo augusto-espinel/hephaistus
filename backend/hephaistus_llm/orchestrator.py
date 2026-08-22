@@ -140,7 +140,7 @@ class LLMOrchestrator:
                 for m in messages
             ],
             'assembled_context': context_result.prompt,
-            'layers': context_result.layers,
+            'layers': context_result.layer_contents,
         }
         
         with open(debug_file, 'w') as f:

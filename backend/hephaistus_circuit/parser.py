@@ -87,6 +87,35 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
         # 2. Junctions (wires that touch the same junction are connected)
         # 3. Wires that touch the same label position
         
+        def point_on_segment(pt, p1, p2, tol):
+            """Check if point pt lies on the line segment from p1 to p2 (within tolerance)."""
+            px, py = pt
+            x1, y1 = p1
+            x2, y2 = p2
+            
+            # Check if point is within bounding box of segment
+            if not (min(x1, x2) - tol <= px <= max(x1, x2) + tol and
+                    min(y1, y2) - tol <= py <= max(y1, y2) + tol):
+                return False
+            
+            # For vertical/horizontal lines, simpler check
+            if abs(x2 - x1) < tol:  # Vertical line
+                return abs(px - x1) < tol
+            if abs(y2 - y1) < tol:  # Horizontal line
+                return abs(py - y1) < tol
+            
+            # For diagonal lines, check distance from point to line
+            # Using cross product method
+            line_len_sq = (x2 - x1)**2 + (y2 - y1)**2
+            if line_len_sq < 1e-10:
+                return (px - x1)**2 + (py - y1)**2 < tol**2
+            
+            # Distance from point to infinite line
+            t = max(0, min(1, ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / line_len_sq))
+            proj_x = x1 + t * (x2 - x1)
+            proj_y = y1 + t * (y2 - y1)
+            return (px - proj_x)**2 + (py - proj_y)**2 < tol**2
+        
         def propagate_net_label(start_pos, tolerance=0.5):
             """Propagate net label through connected wires and junctions."""
             visited_positions = set()
@@ -103,20 +132,32 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                 visited_positions.add(current_pos)
                 positions_with_net.add(current_pos)
                 
-                # Find all wires that touch this position (within tolerance)
+                # Find all wires that touch this position (endpoint OR anywhere along segment)
                 for wire in wire_segments:
                     if wire["uuid"] in visited_wires:
                         continue
                     
-                    # Check if any point on this wire is close to current_pos
+                    wire_connected = False
+                    
+                    # Check if current_pos is at any wire endpoint
                     for wire_point in wire["points"]:
                         if abs(wire_point[0] - current_pos[0]) < tolerance and abs(wire_point[1] - current_pos[1]) < tolerance:
-                            visited_wires.add(wire["uuid"])
-                            # Add all points on this wire
-                            for point in wire["points"]:
-                                positions_with_net.add(point)
-                                to_visit.append(point)
+                            wire_connected = True
                             break
+                    
+                    # Check if current_pos lies ON the wire segment (not just at endpoints)
+                    if not wire_connected and len(wire["points"]) >= 2:
+                        for i in range(len(wire["points"]) - 1):
+                            if point_on_segment(current_pos, wire["points"][i], wire["points"][i+1], tolerance):
+                                wire_connected = True
+                                break
+                    
+                    if wire_connected:
+                        visited_wires.add(wire["uuid"])
+                        # Add all points on this wire
+                        for point in wire["points"]:
+                            positions_with_net.add(point)
+                            to_visit.append(point)
                 
                 # Check if this position is at a junction
                 # If so, find all other wires at this junction
@@ -404,6 +445,10 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
         all_net_names = set(net_pins.keys())
         all_net_names.update(label_positions.values())
         
+        def filter_pwr_pins(pin_list):
+            """Remove power symbol pins from pin list."""
+            return [p for p in pin_list if not (p.startswith('#PWR') or p.startswith('#FL'))]
+        
         for label in schematic.labels:
             net_name = label.text if label.text else ""
             if net_name:
@@ -415,7 +460,7 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                         "x": label.position.X,
                         "y": label.position.Y
                     },
-                    "connectedPins": net_pins.get(net_name, [])
+                    "connectedPins": filter_pwr_pins(net_pins.get(net_name, []))
                 })
         
         # Add unnamed nets (nets without labels but with connections)
@@ -426,7 +471,7 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                     "uuid": "",
                     "type": "Unnamed",
                     "position": {"x": 0, "y": 0},
-                    "connectedPins": pins
+                    "connectedPins": filter_pwr_pins(pins)
                 })
         
         # Get title block info
