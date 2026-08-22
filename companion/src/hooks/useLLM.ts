@@ -23,10 +23,11 @@ export function useLLM() {
   const { data, loading, error, execute } = useApi<GenerateResponse>()
 
   const generate = useCallback(async (request: GenerateRequest) => {
-    await execute('/api/llm/generate', {
+    const result = await execute('/api/llm/generate', {
       method: 'POST',
       body: JSON.stringify(request),
     })
+    return result
   }, [execute])
 
   return { 

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useAppState } from '@/context/AppContext'
 import { useApi } from '@/hooks/useApi'
 import { ContextView } from '@/components/ContextView'
 import { TokenBudgetView } from '@/components/TokenBudgetView'
@@ -10,17 +11,26 @@ export function ContextInspector() {
   const [includeFullSim, setIncludeFullSim] = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [lastEventSource, setLastEventSource] = useState<string | null>(null)
-  const { data, loading, error, execute } = useApi<ContextAssemblyResult>()
+  
+  // Shared app state
+  const { lastContext, setLastContext, fetchLastPrompt } = useAppState()
+  
+  // For manual assembly with custom request
+  const { loading, error, execute } = useApi<ContextAssemblyResult>()
 
   const handleAssemble = useCallback(async (source?: string) => {
-    await execute('/api/context/assemble', {
+    // For manual assembly, use the local API call
+    const result = await execute('/api/context/assemble', {
       method: 'POST',
       body: JSON.stringify({ request, includeFullSim }),
     })
+    if (result) {
+      setLastContext(result)
+    }
     if (source) {
       setLastEventSource(source)
     }
-  }, [execute, request, includeFullSim])
+  }, [execute, request, includeFullSim, setLastContext])
 
   // Manual assemble button
   const handleManualAssemble = () => {
@@ -33,13 +43,16 @@ export function ContextInspector() {
     if (!autoRefresh) return
 
     const unsubPrompt = on(Events.PROMPT_SENT, () => {
-      handleAssemble('after prompt sent')
+      fetchLastPrompt()
+      setLastEventSource('after prompt sent')
     })
     const unsubSchematic = on(Events.SCHEMATIC_LOADED, () => {
-      handleAssemble('after schematic loaded')
+      fetchLastPrompt()
+      setLastEventSource('after schematic loaded')
     })
     const unsubSim = on(Events.SIMULATION_IMPORTED, () => {
-      handleAssemble('after simulation imported')
+      fetchLastPrompt()
+      setLastEventSource('after simulation imported')
     })
 
     return () => {
@@ -47,7 +60,7 @@ export function ContextInspector() {
       unsubSchematic()
       unsubSim()
     }
-  }, [autoRefresh, handleAssemble])
+  }, [autoRefresh, fetchLastPrompt])
 
   return (
     <div className="context-inspector">
@@ -108,10 +121,10 @@ export function ContextInspector() {
         </div>
       )}
 
-      {data && (
+      {lastContext && (
         <div className="result-panel">
-          <TokenBudgetView budget={data.budget_summary} totalTokens={data.total_tokens} />
-          <ContextView layers={data.layers} />
+          <TokenBudgetView budget={lastContext.budget_summary} totalTokens={lastContext.total_tokens} />
+          <ContextView layers={lastContext.layers} />
         </div>
       )}
     </div>

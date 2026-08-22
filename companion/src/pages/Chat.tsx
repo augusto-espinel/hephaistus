@@ -3,6 +3,7 @@ import { useSessionStatus } from '@/hooks/useSessionStatus'
 import { useSimulationState, useSimulationImport } from '@/hooks/useSimulation'
 import { useLLM } from '@/hooks/useLLM'
 import { useSchematic } from '@/hooks/useSchematic'
+import { useAppState } from '@/context/AppContext'
 import { SessionStatus } from '@/components/SessionStatus'
 import { ImportSimulationDialog } from '@/components/ImportSimulationDialog'
 import { LoadSchematicDialog } from '@/components/LoadSchematicDialog'
@@ -12,6 +13,9 @@ export function Chat() {
   const [request, setRequest] = useState('')
   const [showImportDialog, setShowImportDialog] = useState(false)
   const [showLoadDialog, setShowLoadDialog] = useState(false)
+  
+  // Shared app state (persists across tab switches)
+  const { lastResponse, setLastResponse } = useAppState()
   
   // Session status (includes schematic + SPICE libraries)
   const { 
@@ -53,10 +57,20 @@ export function Chat() {
   const handleSubmit = async () => {
     if (!canPrompt || !request.trim()) return
 
-    await generate({
+    const result = await generate({
       request: request.trim(),
       provider: 'ollama', // Default to local
     })
+    
+    // Persist response to shared state so it survives tab switches
+    if (result) {
+      setLastResponse({
+        raw_response: result.raw_response || '',
+        patch_plan: result.patch_plan || null,
+        provider: '',
+        model: '',
+      })
+    }
     
     // Signal Context Inspector to refresh
     emit(Events.PROMPT_SENT)
@@ -78,6 +92,9 @@ export function Chat() {
     refreshSession()
     emit(Events.SCHEMATIC_LOADED)
   }
+
+  // Show the shared response if available, otherwise the hook response
+  const displayResponse = lastResponse || llmData
 
   return (
     <div className="chat-page">
@@ -118,20 +135,20 @@ export function Chat() {
 
       <div className="chat-container">
         <div className="chat-messages">
-          {llmData?.raw_response && (
+          {displayResponse?.raw_response && (
             <div className="message assistant">
               <div className="message-content">
-                {llmData.raw_response}
+                {displayResponse.raw_response}
               </div>
-              {llmData.patch_plan && (
+              {displayResponse.patch_plan && (
                 <div className="patch-plan-preview">
                   <h4>Proposed Changes:</h4>
-                  <pre>{JSON.stringify(llmData.patch_plan, null, 2)}</pre>
+                  <pre>{JSON.stringify(displayResponse.patch_plan, null, 2)}</pre>
                 </div>
               )}
             </div>
           )}
-          {!llmData && !llmLoading && hasSession && (
+          {!displayResponse && !llmLoading && hasSession && (
             <div className="empty-state">
               <p>No conversation yet. Describe a change you'd like to make.</p>
               <p className="hint">

@@ -1,10 +1,10 @@
 export interface ContextAssemblyResult {
-  session_id: string
-  assembled_at: string
+  session_id?: string
+  assembled_at?: string
   total_tokens: number
   budget_summary: BudgetSummary | null
   layers: Record<string, string>
-  prompt: string
+  prompt?: string
 }
 
 export interface BudgetSummary {
