@@ -128,6 +128,11 @@ class SessionPersistence:
                     "analysis_type": session.simulation.analysis_type,
                     "converged": session.simulation.converged,
                     "staleness_warning": session.simulation.staleness_warning,
+                    "schematic_hash": session.simulation.schematic_hash,
+                    "op_points": session.simulation.op_points[:30],
+                    "signal_summaries": session.simulation.signal_summaries[:20],
+                    "warnings": session.simulation.warnings[:10],
+                    "errors": session.simulation.errors[:5],
                 },
                 "directives": session.directives.to_dict(),
                 "pending_patch_plan": session.pending_patch_plan,
@@ -178,6 +183,11 @@ class SessionPersistence:
             analysis_type=session_data.get("simulation", {}).get("analysis_type"),
             converged=session_data.get("simulation", {}).get("converged"),
             staleness_warning=session_data.get("simulation", {}).get("staleness_warning"),
+            schematic_hash=session_data.get("simulation", {}).get("schematic_hash"),
+            op_points=session_data.get("simulation", {}).get("op_points", []),
+            signal_summaries=session_data.get("simulation", {}).get("signal_summaries", []),
+            warnings=session_data.get("simulation", {}).get("warnings", []),
+            errors=session_data.get("simulation", {}).get("errors", []),
         )
         
         directives_data = session_data.get("directives", {})

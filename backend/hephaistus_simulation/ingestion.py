@@ -32,6 +32,7 @@ class IngestedSimulation:
     signals: List[str] = field(default_factory=list)
     signal_count: int = 0
     sample_count: int = 0
+    signal_summaries: List[Dict[str, Any]] = field(default_factory=list)
     csv_path: Optional[str] = None
     console_path: Optional[str] = None
 
@@ -124,24 +125,78 @@ def _parse_console(text: str, result: IngestedSimulation) -> None:
 
 def _parse_csv(csv_path: str, result: IngestedSimulation) -> None:
     """Parse ngspice CSV export and update result."""
+    import statistics
+    
     try:
         with open(csv_path, 'r') as f:
-            reader = csv.reader(f)
+            # Auto-detect delimiter (ngspice can use ; or ,)
+            sample = f.read(1024)
+            f.seek(0)
+            delimiter = ';' if ';' in sample.split('\n')[0] else ','
+            
+            reader = csv.reader(f, delimiter=delimiter)
             headers = next(reader, None)
             
             if not headers:
                 return
             
-            # Headers are signal names (time, V(out), I(R1), etc.)
-            result.signals = [h.strip() for h in headers if h.strip()]
+            # Clean headers (remove empty strings from trailing delimiter)
+            headers = [h.strip() for h in headers if h.strip()]
+            result.signals = headers
             result.signal_count = len(result.signals)
             
-            # Count samples
+            # Read ALL values for summary computation
+            all_values = {h: [] for h in headers}
             sample_count = 0
+            
             for row in reader:
                 sample_count += 1
+                for i, h in enumerate(headers):
+                    if i < len(row):
+                        try:
+                            all_values[h].append(float(row[i]))
+                        except (ValueError, IndexError):
+                            pass
+            
+            # Detect analysis type from CSV signal names
+            if not result.analysis_type or result.analysis_type == 'unknown':
+                signal_str = ' '.join(headers).lower()
+                if 'time' in signal_str:
+                    result.analysis_type = 'tran'
+                elif 'frequency' in signal_str or 'freq' in signal_str:
+                    result.analysis_type = 'ac'
+                elif 'sweep' in signal_str:
+                    result.analysis_type = 'dc'
+            
             result.sample_count = sample_count
             
+            # Compute signal summaries for voltage/current signals
+            for name, values in all_values.items():
+                if name.lower() == 'time' or not values:
+                    continue
+                
+                # Filter out invalid values
+                valid_values = [v for v in values if isinstance(v, (int, float))]
+                if not valid_values:
+                    continue
+                
+                # Only include V() or I() signals to keep context focused
+                if name.startswith('V(') or name.startswith('I('):
+                    summary = {
+                        'name': name,
+                        'min': min(valid_values),
+                        'max': max(valid_values),
+                        'mean': statistics.mean(valid_values),
+                        'initial': valid_values[0],
+                        'final': valid_values[-1],
+                        'samples': len(valid_values),
+                    }
+                    # Compute std only if we have enough samples
+                    if len(valid_values) > 1:
+                        summary['std'] = statistics.stdev(valid_values)
+                    
+                    result.signal_summaries.append(summary)
+                    
     except Exception as e:
         result.errors.append(f"CSV parse error: {str(e)}")
 
@@ -166,7 +221,12 @@ def summarize_waveform(
     
     try:
         with open(csv_path, 'r') as f:
-            reader = csv.reader(f)
+            # Auto-detect delimiter
+            sample = f.read(1024)
+            f.seek(0)
+            delimiter = ';' if ';' in sample.split('\n')[0] else ','
+            
+            reader = csv.reader(f, delimiter=delimiter)
             headers = next(reader, None)
             
             if not headers:

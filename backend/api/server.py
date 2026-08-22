@@ -554,6 +554,7 @@ async def import_simulation(request: SimulationImportRequest):
     service.session.simulation.analysis_type = ingested.analysis_type
     service.session.simulation.converged = ingested.converged
     service.session.simulation.op_points = ingested.op_points
+    service.session.simulation.signal_summaries = ingested.signal_summaries
     service.session.simulation.warnings = ingested.warnings
     service.session.simulation.errors = ingested.errors
     service.session.simulation.staleness_warning = None
@@ -573,6 +574,7 @@ async def import_simulation(request: SimulationImportRequest):
         "errors": ingested.errors,
         "op_point_count": len(ingested.op_points),
         "signal_count": ingested.signal_count,
+        "signal_summary_count": len(ingested.signal_summaries),
         "sample_count": ingested.sample_count,
     }
 

@@ -81,7 +81,17 @@ class SimulationLayer:
                 lines.append(f"  {name}:")
                 for key, val in sig.items():
                     if key != "name" and val is not None:
-                        lines.append(f"    {key}: {val}")
+                        # Format floats in engineering notation
+                        if isinstance(val, float):
+                            # Use appropriate precision
+                            if abs(val) >= 100:
+                                lines.append(f"    {key}: {val:.3f}")
+                            elif abs(val) >= 1:
+                                lines.append(f"    {key}: {val:.4f}")
+                            else:
+                                lines.append(f"    {key}: {val:.6e}")
+                        else:
+                            lines.append(f"    {key}: {val}")
             if len(self.simulation.signal_summaries) > self.max_signals:
                 lines.append(f"  ... and {len(self.simulation.signal_summaries) - self.max_signals} more signals")
         
