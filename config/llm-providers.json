@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "providers": [
+    {
+      "id": "ollama",
+      "name": "Ollama (Local)",
+      "description": "Local inference, no API key required",
+      "requires_api_key": false,
+      "base_url": "http://localhost:11434",
+      "models": [
+        {
+          "id": "gemma4:e4b",
+          "name": "Gemma 4 E4B",
+          "description": "Efficient 4B model, good for quick tasks",
+          "context_length": 8192,
+          "recommended_for": ["quick", "draft"]
+        },
+        {
+          "id": "qwen3-coder-next:latest",
+          "name": "Qwen3 Coder",
+          "description": "Code-specialized, larger context",
+          "context_length": 32768,
+          "recommended_for": ["code", "complex"]
+        },
+        {
+          "id": "qwen2.5vl:latest",
+          "name": "Qwen 2.5 VL",
+          "description": "Vision-capable model",
+          "context_length": 16384,
+          "recommended_for": ["vision"]
+        }
+      ]
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter (Cloud)",
+      "description": "Access to multiple cloud providers",
+      "requires_api_key": true,
+      "env_var": "OPENROUTER_API_KEY",
+      "base_url": "https://openrouter.ai/api/v1",
+      "models": [
+        {
+          "id": "anthropic/claude-3.5-sonnet",
+          "name": "Claude 3.5 Sonnet",
+          "description": "Best for complex reasoning",
+          "context_length": 200000,
+          "recommended_for": ["complex", "reasoning"]
+        },
+        {
+          "id": "anthropic/claude-3.5-haiku",
+          "name": "Claude 3.5 Haiku",
+          "description": "Fast and efficient",
+          "context_length": 200000,
+          "recommended_for": ["quick", "draft"]
+        },
+        {
+          "id": "openai/gpt-4o",
+          "name": "GPT-4o",
+          "description": "OpenAI's flagship model",
+          "context_length": 128000,
+          "recommended_for": ["general"]
+        },
+        {
+          "id": "google/gemini-pro-1.5",
+          "name": "Gemini Pro 1.5",
+          "description": "Large context, multimodal",
+          "context_length": 1000000,
+          "recommended_for": ["large_context", "vision"]
+        },
+        {
+          "id": "deepseek/deepseek-v4-pro-0813",
+          "name": "DeepSeek Chat",
+          "description": "Cost-effective alternative",
+          "context_length": 64000,
+          "recommended_for": ["cost_effective"]
+        },
+        {
+          "id": "openrouter/~moonshotai/kimi-latest",
+          "name": "Kimi",
+          "description": "Cost-effective yet capable",
+          "context_length": 1000000,
+          "recommended_for": ["cost_effective", "reasoning"]
+        }
+      ]
+    }
+  ],
+  "defaults": {
+    "provider": "ollama",
+    "model": "gemma4:e4b"
+  }
+}

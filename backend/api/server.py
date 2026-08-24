@@ -34,6 +34,9 @@ from hephaistus_simulation.archiver import SimulationArchive
 from hephaistus_llm import LLMOrchestrator, ProviderConfig
 
 
+# Provider config path
+PROVIDERS_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "llm-providers.json"
+
 # Application
 app = FastAPI(
     title="HephAIstus Companion API",
@@ -301,6 +304,57 @@ async def restore_session(project_path: Optional[str] = None):
         }
 
 
+@app.get("/api/llm/providers")
+async def get_llm_providers():
+    """
+    Get available LLM providers and models.
+    
+    Loads configuration from config/llm-providers.json.
+    Returns provider list with models and defaults.
+    Also includes whether API keys are configured.
+    """
+    import json
+    
+    if not PROVIDERS_CONFIG_PATH.exists():
+        raise HTTPException(
+            status_code=500, 
+            detail="Provider config not found"
+        )
+    
+    with open(PROVIDERS_CONFIG_PATH) as f:
+        config = json.load(f)
+    
+    # Check API key availability for each provider
+    providers_with_status = []
+    for provider in config.get("providers", []):
+        provider_status = provider.copy()
+        
+        # Check if API key is configured (for providers that need one)
+        if provider.get("requires_api_key"):
+            env_var = provider.get("env_var","")
+            api_key = os.environ.get(env_var)
+            provider_status["api_key_configured"] = bool(api_key)
+        else:
+            provider_status["api_key_configured"] = True  # Local providers don't need keys
+        
+        # For Ollama, check if server is reachable
+        if provider["id"] == "ollama":
+            try:
+                import requests
+                base_url = provider.get("base_url", "http://localhost:11434")
+                resp = requests.get(f"{base_url}/api/tags", timeout=2)
+                provider_status["server_available"] = resp.status_code == 200
+            except:
+                provider_status["server_available"] = False
+        
+        providers_with_status.append(provider_status)
+    
+    return {
+        "providers": providers_with_status,
+        "defaults": config.get("defaults", {"provider": "ollama", "model": "gemma4:e4b"})
+    }
+
+
 @app.get("/api/schematic/state", response_model=SchematicStateResponse)
 async def get_schematic_state():
     """
@@ -334,6 +388,117 @@ async def get_schematic_state():
         last_modified=session.schematic.last_modified.isoformat() if session.schematic.last_modified else None,
         has_unsaved_changes=has_unsaved,
     )
+
+
+@app.get("/api/schematic/check-stale")
+async def check_schematic_stale():
+    """
+    Check if the schematic file has been modified since last load.
+    
+    Compares current file hash with stored hash to detect external changes.
+    Returns staleness status and suggests reload if needed.
+    """
+    service = get_context_service()
+    session = service.session
+    
+    if not session.schematic.path:
+        return {"stale": False, "reason": "no_schematic"}
+    
+    schematic_path = Path(session.schematic.path)
+    if not schematic_path.exists():
+        return {"stale": True, "reason": "file_deleted", "path": str(schematic_path)}
+    
+    current_hash = session.schematic.compute_hash()
+    stored_hash = session.schematic.hash
+    
+    if current_hash == stored_hash:
+        return {"stale": False, "reason": "unchanged"}
+    
+    return {
+        "stale": True,
+        "reason": "modified_externally",
+        "path": str(schematic_path),
+        "stored_hash": stored_hash,
+        "current_hash": current_hash,
+        "last_modified": session.schematic.last_modified.isoformat() if session.schematic.last_modified else None,
+    }
+
+
+@app.delete("/api/history")
+async def clear_history():
+    """
+    Clear all conversation history for the current project.
+    
+    This removes all entries from the history database and resets
+    the context, allowing the user to start fresh on the same circuit.
+    The schematic and simulation state are preserved.
+    """
+    global _history_store, _context_service, _project_root
+    
+    if not _history_store:
+        raise HTTPException(status_code=404, detail="No project loaded")
+    
+    try:
+        # Clear all history entries
+        _history_store.clear_all()
+        
+        # Reset context service (keeps schematic/simulation, clears history)
+        if _context_service:
+            _context_service.clear_history()
+        
+        # Clear cached last_prompt.json
+        if _project_root:
+            debug_file = _project_root / '.hephaistus' / 'last_prompt.json'
+            if debug_file.exists():
+                debug_file.unlink()
+        
+        return {
+            "status": "cleared",
+            "message": "History cleared. You can start a fresh design iteration.",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to clear history: {str(e)}")
+
+
+@app.post("/api/summary/generate")
+async def generate_summary():
+    """
+    Generate a session summary using the LLM.
+    
+    Creates a prompt asking the LLM to summarize the work done,
+    using the condensed context (not full history re-read).
+    Returns the summary prompt for the frontend to display.
+    """
+    global _context_service, _history_store
+    
+    if not _context_service:
+        raise HTTPException(status_code=404, detail="No session loaded")
+    
+    # Get history statistics for context
+    history_stats = None
+    if _history_store:
+        history_stats = _history_store.get_statistics()
+    
+    # Build summary prompt based on context
+    summary_prompt = """Please provide a concise engineering summary of the work done in this session. Include:
+
+1. **Design Goals**: What changes or optimizations were discussed?
+2. **Key Decisions**: What design choices were made and why?
+3. **Patch Plans**: What schematic changes were proposed?
+4. **Validation Results**: Any simulation results or validation feedback?
+5. **Open Items**: What remains to be done or verified?
+
+Format the summary in markdown, keeping it focused on actionable engineering decisions rather than conversational details."""
+
+    # Return as a pseudo-response that the frontend can render
+    return {
+        "status": "generated",
+        "prompt": summary_prompt,
+        "history_stats": {
+            "total_entries": history_stats.get("total_entries", 0) if history_stats else 0,
+            "sessions": history_stats.get("sessions", []) if history_stats else [],
+        } if history_stats else None,
+    }
 
 
 @app.post("/api/schematic/load")
@@ -733,7 +898,9 @@ async def get_recent_history(
             "session_id": e.session_id,
             "timestamp": e.timestamp.isoformat(),
             "user_request": e.user_request,
+            "llm_response": e.llm_response,
             "reasoning_summary": e.reasoning_summary,
+            "patch_plan_json": e.patch_plan_json,
             "user_action": e.user_action,
             "context_tokens": e.context_tokens,
             "response_tokens": e.response_tokens,

@@ -124,6 +124,18 @@ class SessionLayer:
                 else:
                     lines.append(f"- {ref} ({lib_id})")
                 
+                # Include SPICE simulation parameters
+                spice = c.get("spice", {})
+                sim_params = spice.get("params", "") if spice else c.get("Sim.Params", "")
+                if sim_params:
+                    lines.append(f"  Sim.Params: {sim_params}")
+                sim_device = spice.get("device", "") if spice else ""
+                if sim_device:
+                    lines.append(f"  Sim.Device: {sim_device}")
+                sim_type = spice.get("type", "") if spice else ""
+                if sim_type:
+                    lines.append(f"  Sim.Type: {sim_type}")
+                
                 # Include pin-net assignments
                 pins = c.get("pins", {})
                 if pins:

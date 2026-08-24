@@ -412,6 +412,13 @@ class HistoryStore:
                 (session_id,)
             )
             return cursor.rowcount
+
+    def clear_all(self) -> int:
+        """Delete all history entries for this project."""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM history_entries")
+            return cursor.rowcount
     
     def _row_to_record(self, row: sqlite3.Row) -> HistoryEntryRecord:
         """Convert database row to HistoryEntryRecord."""

@@ -192,6 +192,16 @@ class ContextService:
             alternatives_rejected=alternatives_rejected or [],
             user_constraint=user_constraint,
         )
+
+    def clear_history(self) -> None:
+        """Clear conversation history and reasoning trace.
+        
+        Preserves schematic and simulation state, allowing fresh
+        design iterations on the same circuit.
+        """
+        self.history.clear()
+        self.reasoning.clear()
+        self.budget.reset()
     
     def assemble(
         self,

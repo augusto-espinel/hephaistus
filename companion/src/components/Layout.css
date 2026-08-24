@@ -82,6 +82,51 @@
   color: #888;
 }
 
+/* Session bar in header */
+.session-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.25rem 0.75rem;
+  background: #252525;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.schematic-name {
+  color: #888;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-btn {
+  padding: 0.25rem 0.5rem;
+  background: transparent;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #888;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.header-btn:hover {
+  background: #333;
+  color: #ccc;
+}
+
+.header-btn.load:hover {
+  border-color: #f5a623;
+  color: #f5a623;
+}
+
+.header-btn.clear:hover {
+  border-color: #f44336;
+  color: #f44336;
+}
+
 .main {
   flex: 1;
   overflow: auto;

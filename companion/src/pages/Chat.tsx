@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useSessionStatus } from '@/hooks/useSessionStatus'
 import { useSimulationState, useSimulationImport } from '@/hooks/useSimulation'
 import { useLLM } from '@/hooks/useLLM'
 import { useSchematic } from '@/hooks/useSchematic'
+import { useSession } from '@/hooks/useSession'
 import { useAppState } from '@/context/AppContext'
 import { SessionStatus } from '@/components/SessionStatus'
 import { ImportSimulationDialog } from '@/components/ImportSimulationDialog'
@@ -10,13 +11,42 @@ import { LoadSchematicDialog } from '@/components/LoadSchematicDialog'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import { emit, Events } from '@/events'
 
-export function Chat() {
+interface ChatProps {
+  showLoadDialog?: boolean
+  onLoadDialogClose?: () => void
+  showClearDialog?: boolean
+  onClearDialogClose?: (confirmed: boolean) => void
+}
+
+export function Chat({ 
+  showLoadDialog = false, 
+  onLoadDialogClose,
+  showClearDialog = false,
+  onClearDialogClose 
+}: ChatProps) {
   const [request, setRequest] = useState('')
-  const [showImportDialog, setShowImportDialog] = useState(false)
-  const [showLoadDialog, setShowLoadDialog] = useState(false)
+  const [internalShowLoad, setInternalShowLoad] = useState(false)
+  const [internalShowImport, setInternalShowImport] = useState(false)
+  
+  // Use external or internal dialog state
+  const showLoad = showLoadDialog || internalShowLoad
+  const setShowLoad = onLoadDialogClose 
+    ? (show: boolean) => !show && onLoadDialogClose() 
+    : setInternalShowLoad
   
   // Shared app state (persists across tab switches)
-  const { lastResponse, setLastResponse } = useAppState()
+  const { 
+    lastResponse, 
+    setLastResponse,
+    llmSelection,
+    historyEntries,
+    historyIndex,
+    setHistoryIndex,
+    historyLoading,
+    fetchHistory,
+    navigateHistory,
+    canNavigateHistory,
+  } = useAppState()
   
   // Session status (includes schematic + SPICE libraries)
   const { 
@@ -31,7 +61,6 @@ export function Chat() {
   
   // LLM generation
   const { 
-    data: llmData, 
     loading: llmLoading, 
     error: llmError, 
     generate 
@@ -51,16 +80,36 @@ export function Chat() {
     load: loadSchematic
   } = useSchematic()
 
+  // Session management
+  const {
+    generateSummary,
+  } = useSession()
+
   // Pre-prompt guard status
   const hasSession = sessionData?.has_session ?? false
   const canPrompt = hasSession
+
+  // Refresh history after session loads
+  useEffect(() => {
+    if (hasSession) {
+      fetchHistory()
+    }
+  }, [hasSession, fetchHistory])
+
+  // Handle clear dialog confirmation
+  useEffect(() => {
+    if (showClearDialog && onClearDialogClose) {
+      // Dialog is shown externally, wait for result
+    }
+  }, [showClearDialog, onClearDialogClose])
 
   const handleSubmit = async () => {
     if (!canPrompt || !request.trim()) return
 
     const result = await generate({
       request: request.trim(),
-      provider: 'ollama', // Default to local
+      provider: llmSelection.provider as 'ollama' | 'openrouter',
+      model: llmSelection.model,
     })
     
     // Persist response to shared state so it survives tab switches
@@ -68,13 +117,44 @@ export function Chat() {
       setLastResponse({
         raw_response: result.raw_response || '',
         patch_plan: result.patch_plan || null,
-        provider: '',
-        model: '',
+        provider: llmSelection.provider,
+        model: llmSelection.model,
       })
+      setRequest('') // Clear input after successful submission
+      // Refresh history to include new entry
+      fetchHistory()
     }
     
     // Signal Context Inspector to refresh
     emit(Events.PROMPT_SENT)
+  }
+
+  const handleGenerateSummary = async () => {
+    if (!canPrompt) return
+
+    try {
+      const result = await generateSummary()
+      if (result && result.prompt) {
+        // Send the summary prompt to the LLM
+        const llmResult = await generate({
+          request: result.prompt,
+          provider: llmSelection.provider as 'ollama' | 'openrouter',
+          model: llmSelection.model,
+        })
+        
+        if (llmResult) {
+          setLastResponse({
+            raw_response: llmResult.raw_response || '',
+            patch_plan: llmResult.patch_plan || null,
+            provider: llmSelection.provider,
+            model: llmSelection.model,
+          })
+          fetchHistory()
+        }
+      }
+    } catch (err) {
+      console.error('Failed to generate summary:', err)
+    }
   }
 
   const handleImportSimulation = async (csvPath: string | null, consoleText: string | null) => {
@@ -91,11 +171,39 @@ export function Chat() {
   const handleLoadSchematic = async (path: string) => {
     await loadSchematic(path)
     refreshSession()
+    setLastResponse(null) // Clear previous response
+    setHistoryIndex(-1) // Reset history navigation
+    fetchHistory() // Load history for new project
     emit(Events.SCHEMATIC_LOADED)
   }
 
-  // Show the shared response if available, otherwise the hook response
-  const displayResponse = lastResponse || llmData
+  const handleReloadSchematic = async () => {
+    if (!sessionData?.schematic?.path) return
+    await loadSchematic(sessionData.schematic.path)
+    refreshSession()
+    fetchHistory() // Refresh history after reload
+  }
+
+  // Get current display based on history navigation
+  const getCurrentEntry = () => {
+    if (historyIndex === -1 || historyIndex >= historyEntries.length) {
+      return null // Show current/none
+    }
+    return historyEntries[historyIndex]
+  }
+
+  const currentEntry = getCurrentEntry()
+  
+  // Determine what to display: history entry or last response
+  const displayResponse = currentEntry 
+    ? {
+        raw_response: currentEntry.llm_response || '',
+        patch_plan: currentEntry.patch_plan_json ? JSON.parse(currentEntry.patch_plan_json) : null,
+        is_history: true,
+        timestamp: currentEntry.timestamp,
+        request: currentEntry.user_request,
+      }
+    : lastResponse
 
   return (
     <div className="chat-page">
@@ -109,8 +217,9 @@ export function Chat() {
       <SessionStatus 
         data={sessionData}
         loading={sessionLoading}
-        onLoadSchematic={() => setShowLoadDialog(true)}
-        onImportSimulation={() => setShowImportDialog(true)}
+        onLoadSchematic={() => setInternalShowLoad(true)}
+        onImportSimulation={() => setInternalShowImport(true)}
+        onReloadSchematic={handleReloadSchematic}
       />
 
       {sessionError && (
@@ -134,10 +243,51 @@ export function Chat() {
         </div>
       )}
 
+      {/* History Navigation */}
+      {hasSession && historyEntries.length > 0 && (
+        <div className="history-nav">
+          <span className="history-label">Design Iterations</span>
+          <div className="history-controls">
+            <button 
+              className="history-btn"
+              onClick={() => navigateHistory('prev')}
+              disabled={!canNavigateHistory.prev || historyLoading}
+              title="Previous iteration"
+            >
+              ← Older
+            </button>
+            <span className="history-position">
+              {historyIndex === -1 
+                ? 'Current' 
+                : `${historyEntries.length - historyIndex} / ${historyEntries.length}`}
+            </span>
+            <button 
+              className="history-btn"
+              onClick={() => navigateHistory('next')}
+              disabled={!canNavigateHistory.next || historyLoading}
+              title="Next iteration"
+            >
+              Newer →
+            </button>
+          </div>
+          {currentEntry && (
+            <div className="history-timestamp">
+              {new Date(currentEntry.timestamp).toLocaleString()}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Response Display */}
       <div className="chat-container">
         <div className="chat-messages">
           {displayResponse?.raw_response && (
-            <div className="message assistant">
+            <div className={`message assistant ${currentEntry ? 'history-entry' : ''}`}>
+              {currentEntry && (
+                <div className="history-request">
+                  <strong>Request:</strong> {currentEntry.user_request}
+                </div>
+              )}
               <div className="message-content">
                 <MarkdownRenderer content={displayResponse.raw_response} />
               </div>
@@ -159,6 +309,7 @@ export function Chat() {
           )}
         </div>
 
+        {/* Input area */}
         <div className="chat-input">
           <textarea
             value={request}
@@ -176,12 +327,22 @@ export function Chat() {
               }
             }}
           />
-          <button 
-            onClick={handleSubmit} 
-            disabled={!canPrompt || llmLoading || !request.trim()}
-          >
-            {llmLoading ? 'Thinking...' : 'Send'}
-          </button>
+          <div className="input-actions">
+            <button 
+              className="secondary-btn"
+              onClick={handleGenerateSummary}
+              disabled={!canPrompt || llmLoading}
+              title="Generate a summary of this design session"
+            >
+              📋 Summary
+            </button>
+            <button 
+              onClick={handleSubmit} 
+              disabled={!canPrompt || llmLoading || !request.trim()}
+            >
+              {llmLoading ? 'Thinking...' : 'Send'}
+            </button>
+          </div>
         </div>
 
         {llmError && (
@@ -193,16 +354,16 @@ export function Chat() {
       </div>
 
       <ImportSimulationDialog
-        isOpen={showImportDialog}
-        onClose={() => setShowImportDialog(false)}
+        isOpen={internalShowImport}
+        onClose={() => setInternalShowImport(false)}
         onImport={handleImportSimulation}
         loading={importLoading}
         error={importError}
       />
 
       <LoadSchematicDialog
-        isOpen={showLoadDialog}
-        onClose={() => setShowLoadDialog(false)}
+        isOpen={showLoad}
+        onClose={() => setShowLoad(false)}
         onLoad={handleLoadSchematic}
         loading={loadLoading}
         error={loadError}

@@ -1,8 +1,8 @@
 # HephAIstus Architecture
 
-Version: 2.1
-Date: 2026-08-20
-Status: Implementation progress
+Version: 2.2
+Date: 2026-08-24
+Status: Phase 4 complete
 
 ## Architectural summary
 
@@ -469,11 +469,17 @@ This adapter should consume the same backend; it must not become a parallel muta
 - run ngspice/PySpice;
 - capture logs and waveform data.
 
-### Phase 4 — Companion UI
+### Phase 4 — Companion UI ✅
 
-- ask mode;
-- patch preview;
-- simulation history.
+**Completed 2026-08-24:**
+- Chat interface with history navigation
+- Context Inspector for LLM prompt assembly
+- Settings page for LLM provider/model selection
+- Session status panel with staleness detection
+- Simulation import dialog
+- Markdown rendering with KaTeX math support
+- History management (clear, summary generation)
+- Schematic reload with 5-second staleness check
 
 ### Phase 5 — Optional IPC integration
 
@@ -487,15 +493,12 @@ This adapter should consume the same backend; it must not become a parallel muta
 - **KiCad ingestion (2026-07-18):** Extension activation, file watcher, Python/KiUtils path resolution, KiCad 10 parsing, JSON state generation. Tested with `rectifier.kicad_sch` (9 components, 5 nets).
 - **Stub-based net restructuring (2026-08-04):** Apply flow rebuilt around stubs (wire + net label). 26/26 tests passing covering: no-op, series insertion, chained splits, parallel additions, RL chain with Device:L embedding, duplicate-UUID abort. kicad-cli ERC confirms zero new violations vs fixture baseline.
 - **Simulation output parsing (2026-08-20):** Ngspice console output, DC operating points, and raw waveform parsing. Run metadata with schematic hash correlation. LLM context assembly from schematic + simulation state.
-
-### Completed
-
 - **Session persistence (2026-08-21):** Project-scoped sessions stored in `.hephaistus/session.json`. Session includes schematic state, simulation state, user directives, and conversation history. Auto-discovery of project root from schematic path.
+- **Companion UI (2026-08-24):** Full React-based chat interface with history navigation, context inspector, settings page, session status panel, simulation import, markdown rendering with KaTeX math, history management, and schematic staleness detection.
 
 ### In progress
 
 - Simulation parameter management (patch-plan extension)
-- Companion chat UI
 
 ### Future
 

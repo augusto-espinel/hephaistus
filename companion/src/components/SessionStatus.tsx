@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useApi } from '@/hooks/useApi'
 import type { SessionStatusResponse } from '@/hooks/useSessionStatus'
 
 interface SessionStatusProps {
@@ -6,10 +7,51 @@ interface SessionStatusProps {
   loading?: boolean
   onLoadSchematic?: () => void
   onImportSimulation?: () => void
+  onReloadSchematic?: () => void
 }
 
-export function SessionStatus({ data, loading, onLoadSchematic, onImportSimulation }: SessionStatusProps) {
+interface StalenessInfo {
+  stale: boolean
+  reason: string
+  path?: string
+  stored_hash?: string
+  current_hash?: string
+}
+
+export function SessionStatus({ 
+  data, 
+  loading, 
+  onLoadSchematic, 
+  onImportSimulation,
+  onReloadSchematic 
+}: SessionStatusProps) {
   const [showLibraries, setShowLibraries] = useState(false)
+  const [staleness, setStaleness] = useState<StalenessInfo | null>(null)
+  const { execute } = useApi<StalenessInfo>()
+
+  // Check for schematic staleness periodically
+  useEffect(() => {
+    if (!data?.has_session) {
+      setStaleness(null)
+      return
+    }
+
+    const checkStaleness = async () => {
+      try {
+        const result = await execute('/api/schematic/check-stale')
+        setStaleness(result)
+      } catch (err) {
+        console.error('Failed to check staleness:', err)
+      }
+    }
+
+    // Check immediately
+    checkStaleness()
+
+    // Check every 5 seconds
+    const interval = setInterval(checkStaleness, 5000)
+    return () => clearInterval(interval)
+  }, [data?.has_session])
 
   if (loading) {
     return (
@@ -37,6 +79,7 @@ export function SessionStatus({ data, loading, onLoadSchematic, onImportSimulati
   const { schematic, simulation, spice_libraries } = data
   const simStatus = simulation.status
   const hasLibraries = spice_libraries && spice_libraries.length > 0
+  const isStale = staleness?.stale && staleness.reason === 'modified_externally'
 
   return (
     <div className="session-status">
@@ -44,16 +87,35 @@ export function SessionStatus({ data, loading, onLoadSchematic, onImportSimulati
       <div className="status-section">
         <h4>Schematic</h4>
         <div className="status-row">
-          <span className="status-dot current" />
+          <span className={`status-dot ${isStale ? 'stale' : 'current'}`} />
           <span className="status-label">
             {schematic.relative_path || 'unknown'}
           </span>
-          <span className="status-badge saved">loaded</span>
+          <span className={`status-badge ${isStale ? 'warning' : 'saved'}`}>
+            {isStale ? 'modified' : 'loaded'}
+          </span>
+          {onReloadSchematic && (
+            <button 
+              className="reload-mini-btn"
+              onClick={onReloadSchematic}
+              title="Reload schematic"
+            >
+              ↻
+            </button>
+          )}
         </div>
         <div className="status-details">
           <span>{schematic.component_count} components</span>
           <span>{schematic.net_count} nets</span>
         </div>
+        
+        {/* Staleness Warning */}
+        {isStale && (
+          <div className="status-warning stale">
+            <span className="warning-icon">⚠️</span>
+            <span>Schematic modified in KiCad</span>
+          </div>
+        )}
       </div>
 
       {/* Simulation Section */}
@@ -82,12 +144,13 @@ export function SessionStatus({ data, loading, onLoadSchematic, onImportSimulati
           </div>
         )}
 
-        {(simStatus === 'none' || simStatus === 'stale') && onImportSimulation && (
+        {/* Always allow importing new simulation */}
+        {onImportSimulation && (
           <button 
             className="import-button"
             onClick={onImportSimulation}
           >
-            Import Simulation
+            {simStatus === 'none' ? 'Import Simulation' : 'Replace Simulation'}
           </button>
         )}
       </div>

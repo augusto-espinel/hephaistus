@@ -1,7 +1,19 @@
 import { Outlet, NavLink } from 'react-router-dom'
+import { useSessionStatus } from '@/hooks/useSessionStatus'
 import './Layout.css'
 
-export function Layout() {
+interface LayoutProps {
+  onLoadSchematic?: () => void
+  onClearHistory?: () => void
+  clearLoading?: boolean
+}
+
+export function Layout({ onLoadSchematic, onClearHistory, clearLoading }: LayoutProps) {
+  const { data: sessionData } = useSessionStatus()
+  
+  const hasSession = sessionData?.has_session ?? false
+  const schematicName = sessionData?.schematic?.relative_path || 'No schematic'
+
   return (
     <div className="layout">
       <header className="header">
@@ -9,6 +21,28 @@ export function Layout() {
           <span className="logo-icon">🔧</span>
           <span className="logo-text">HephAIstus</span>
         </div>
+        
+        {/* Session actions bar */}
+        <div className="session-bar">
+          <span className="schematic-name" title={sessionData?.schematic?.path || undefined}>
+            {hasSession ? schematicName : 'No schematic loaded'}
+          </span>
+          {onLoadSchematic && (
+            <button className="header-btn load" onClick={onLoadSchematic}>
+              📁 Load
+            </button>
+          )}
+          {hasSession && onClearHistory && (
+            <button 
+              className="header-btn clear" 
+              onClick={onClearHistory}
+              disabled={clearLoading}
+            >
+              🗑️ Clear
+            </button>
+          )}
+        </div>
+        
         <nav className="nav">
           <NavLink to="/" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
             Chat
@@ -22,11 +56,10 @@ export function Layout() {
           <NavLink to="/history" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
             History
           </NavLink>
+          <NavLink to="/settings" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'} title="Settings">
+            ⚙️
+          </NavLink>
         </nav>
-        <div className="status">
-          <span className="status-dot connected" />
-          <span className="status-text">Connected</span>
-        </div>
       </header>
       <main className="main">
         <Outlet />
