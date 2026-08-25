@@ -28,6 +28,7 @@ from hephaistus_context import (
     SimulationStatus,
 )
 from hephaistus_circuit import parse_schematic
+from hephaistus_circuit.engine import validate_patch_plan, apply_patch_plan
 from hephaistus_circuit.spice_library import load_libraries_for_schematic
 from hephaistus_simulation.ingestion import ingest_simulation, to_run_metadata
 from hephaistus_simulation.archiver import SimulationArchive
@@ -673,6 +674,18 @@ class SimulationImportRequest(BaseModel):
     console_text: Optional[str] = None
 
 
+class PatchValidateRequest(BaseModel):
+    """Request to dry-run validate a patch plan."""
+    patch_plan: dict
+    schematic_path: Optional[str] = None  # Uses current session if omitted
+
+
+class PatchApplyRequest(BaseModel):
+    """Request to apply a validated patch plan."""
+    patch_plan: dict
+    schematic_path: Optional[str] = None  # Uses current session if omitted
+
+
 @app.post("/api/simulation/import")
 async def import_simulation(request: SimulationImportRequest):
     """
@@ -852,6 +865,92 @@ async def assemble_context(request: ContextAssembleRequest):
         layers=result.layer_contents,
         prompt=result.prompt,
     )
+
+
+@app.post("/api/patch/validate")
+async def validate_patch(request: PatchValidateRequest):
+    """
+    Dry-run validate a patch plan against the current schematic.
+
+    Returns validation results, affected components/nets, and delta summary
+    without modifying any files. Frontend should call this before showing
+    the Apply button.
+    """
+    service = get_context_service()
+    schematic_path = request.schematic_path or service.session.schematic.path
+    if not schematic_path:
+        raise HTTPException(status_code=400, detail="No schematic loaded. Load a schematic first.")
+
+    from hephaistus_circuit.errors import PatchPlanError
+    try:
+        result = validate_patch_plan(Path(schematic_path), request.patch_plan)
+        return {
+            "status": result["status"],
+            "plan_id": result["plan_id"],
+            "intent": result["intent"],
+            "affected": result["affected"],
+            "delta": result["delta"],
+            "changes": result["changes"],
+            "warnings": result["warnings"],
+            "round_trip": result.get("round_trip"),
+        }
+    except PatchPlanError as e:
+        return {
+            "status": "rejected",
+            "error_code": e.code,
+            "message": e.message,
+            "details": e.details,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)}")
+
+
+@app.post("/api/patch/apply")
+async def apply_patch(request: PatchApplyRequest):
+    """
+    Apply a validated patch plan to the current schematic.
+
+    This modifies the .kicad_sch file on disk. The user must have
+    reviewed the validation results before calling this endpoint.
+    KiCad's .history/ git repo provides rollback capability.
+    """
+    service = get_context_service()
+    schematic_path = request.schematic_path or service.session.schematic.path
+    if not schematic_path:
+        raise HTTPException(status_code=400, detail="No schematic loaded. Load a schematic first.")
+
+    from hephaistus_circuit.errors import PatchPlanError
+    try:
+        result = apply_patch_plan(Path(schematic_path), request.patch_plan)
+
+        # Re-parse the modified schematic to refresh session state
+        parsed = parse_schematic(str(schematic_path))
+        service.initialize_session(
+            schematic_path=str(schematic_path),
+            parsed_state=parsed,
+        )
+        _save_session()
+
+        return {
+            "status": result["status"],
+            "plan_id": result["plan_id"],
+            "intent": result["intent"],
+            "affected": result["affected"],
+            "delta": result["delta"],
+            "changes": result["changes"],
+            "warnings": result["warnings"],
+            "round_trip": result.get("round_trip"),
+            "schematic_path": str(schematic_path),
+        }
+    except PatchPlanError as e:
+        return {
+            "status": "rejected",
+            "error_code": e.code,
+            "message": e.message,
+            "details": e.details,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Apply failed: {str(e)}")
 
 
 @app.get("/api/history/search", response_model=HistorySearchResponse)

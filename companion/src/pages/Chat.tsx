@@ -9,6 +9,7 @@ import { SessionStatus } from '@/components/SessionStatus'
 import { ImportSimulationDialog } from '@/components/ImportSimulationDialog'
 import { LoadSchematicDialog } from '@/components/LoadSchematicDialog'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import { PatchApprovalCard } from '@/components/PatchApprovalCard'
 import { emit, Events } from '@/events'
 
 interface ChatProps {
@@ -297,10 +298,14 @@ export function Chat({
                 <MarkdownRenderer content={displayResponse.raw_response} />
               </div>
               {displayResponse.patch_plan && (
-                <div className="patch-plan-preview">
-                  <h4>Proposed Changes:</h4>
-                  <pre>{JSON.stringify(displayResponse.patch_plan, null, 2)}</pre>
-                </div>
+                <PatchApprovalCard
+                  patchPlan={displayResponse.patch_plan}
+                  onApplied={() => {
+                    setLastResponse(null)
+                    refreshSession()
+                    fetchHistory()
+                  }}
+                />
               )}
             </div>
           )}
