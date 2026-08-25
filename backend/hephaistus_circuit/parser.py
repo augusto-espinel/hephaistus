@@ -186,6 +186,56 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                 positions, wires = propagate_net_label(pos)
                 net_coverage.setdefault(net_name, set()).update(positions)
         
+        # Power symbols create implicit global nets.
+        # lib_id "power:GND" means Value property is the net name.
+        # We need to collect these BEFORE processing components
+        # so pins can find the net at power symbol positions.
+        power_symbols = []  # Store for later inclusion in components
+        
+        # NOTE: get_pin_position is defined below, so we use a simpler approach here.
+        # Power symbols typically have a single pin at or near the symbol position.
+        # We'll use the symbol position directly for net propagation.
+        
+        for symbol in schematic.schematicSymbols:
+            props = {p.key: p.value for p in symbol.properties}
+            lib_nickname = getattr(symbol, 'libraryNickname', '') or ''
+            entry_name = getattr(symbol, 'entryName', '') or ''
+            lib_id = f"{lib_nickname}:{entry_name}" if lib_nickname else entry_name
+            
+            # Check if this is a power symbol
+            if lib_id.startswith('power:') or lib_id.startswith('Power:'):
+                net_name = props.get('Value', '')  # e.g., "GND", "VCC", "+5V"
+                if not net_name:
+                    net_name = entry_name  # Fallback to library entry name
+                
+                # Get symbol position
+                if hasattr(symbol, 'position') and symbol.position:
+                    sym_x = getattr(symbol.position, 'X', 0)
+                    sym_y = getattr(symbol.position, 'Y', 0)
+                    angle = getattr(symbol.position, 'angle', 0) if hasattr(symbol.position, 'angle') else 0
+                else:
+                    sym_x, sym_y, angle = 0, 0, 0
+                
+                # For power symbols, the connection point is typically at or near the symbol position
+                # The pin is usually at the origin of the symbol, so we use the symbol position directly
+                # This is a simplification but works for most power symbols
+                pin_pos = (sym_x, sym_y)
+                
+                # Add to net_coverage (propagate through connected wires)
+                if net_name:
+                    positions, wires = propagate_net_label(pin_pos)
+                    net_coverage.setdefault(net_name, set()).update(positions)
+                    
+                    # Track power symbol for component list
+                    power_symbols.append({
+                        'uuid': getattr(symbol, 'uuid', 'unknown'),
+                        'reference': props.get('Reference', ''),
+                        'lib_id': lib_id,
+                        'net_name': net_name,
+                        'position': {'x': sym_x, 'y': sym_y},
+                        'pin_position': {'x': pin_pos[0], 'y': pin_pos[1]}
+                    })
+        
         # Also check junctions - they may connect wires from different nets
         for junc_pos in junction_positions:
             # Check if this junction is in any net's coverage
@@ -248,6 +298,7 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
         components = []
         
         # Parse schematic symbols (components placed on the schematic)
+        # Note: Power symbols were already processed above for net coverage
         for symbol in schematic.schematicSymbols:
             # Extract properties from symbol.properties list
             props = {p.key: p.value for p in symbol.properties}
@@ -317,7 +368,8 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                     "Sim.Pins": props.get('Sim.Pins', '')
                 },
                 "spice": spice_props,
-                "pins": pins
+                "pins": pins,
+                "is_power_symbol": lib_id.lower().startswith('power:') if lib_id else False
             }
             components.append(comp)
         
@@ -446,8 +498,8 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
         all_net_names.update(label_positions.values())
         
         def filter_pwr_pins(pin_list):
-            """Remove power symbol pins from pin list."""
-            return [p for p in pin_list if not (p.startswith('#PWR') or p.startswith('#FL'))]
+            """Keep power symbol pins - they show GND/VCC connectivity for LLM context."""
+            return pin_list  # No longer filtering out power pins
         
         for label in schematic.labels:
             net_name = label.text if label.text else ""
@@ -461,6 +513,30 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                         "y": label.position.Y
                     },
                     "connectedPins": filter_pwr_pins(net_pins.get(net_name, []))
+                })
+        
+        # Add power nets (from power symbols like power:GND)
+        # These create implicit global nets without explicit labels
+        for pwr_sym in power_symbols:
+            net_name = pwr_sym['net_name']
+            if net_name and net_name not in [n["name"] for n in nets]:
+                # Find pins connected to this power net
+                connected_pins = net_pins.get(net_name, [])
+                # Add the power symbol's pin
+                pwr_ref = pwr_sym['reference']
+                if pwr_ref:
+                    connected_pins = [f"{pwr_ref}.1"] + [p for p in connected_pins if not p.startswith(pwr_ref)]
+                
+                nets.append({
+                    "name": net_name,
+                    "uuid": pwr_sym['uuid'],
+                    "type": "power",
+                    "position": {
+                        "x": pwr_sym['position']['x'],
+                        "y": pwr_sym['position']['y']
+                    },
+                    "connectedPins": connected_pins,
+                    "is_power_net": True
                 })
         
         # Add unnamed nets (nets without labels but with connections)
@@ -489,12 +565,18 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
         # Parse simulation directives (text elements starting with '.')
         directives = parse_text_elements(schematic)
         
-        # Filter out power symbols (references starting with #)
-        # These are virtual symbols like #PWR01, #FL01 that represent power nets
-        filtered_components = [
-            c for c in components
-            if not c.get("reference", "").startswith("#")
-        ]
+        # Power symbols are now included in components with is_power_symbol flag.
+        # The reference "#PWRnn" indicates a virtual power symbol (not in BOM),
+        # but we keep them for LLM context since they define net connectivity.
+        # 
+        # Previously filtered out, but LLM needs to see:
+        # - Which pins connect to GND/VCC
+        # - Ground references for circuit topology
+        # - Power net connections for SPICE simulation
+        filtered_components = components  # Keep all, including power symbols
+        
+        # Count power symbols for metadata
+        power_symbol_count = sum(1 for c in components if c.get('is_power_symbol', False))
         
         # Extract unique SPICE library references
         spice_libraries = list(set(
@@ -504,7 +586,7 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
         ))
         
         return {
-            "schemaVersion": "1.1.0",
+            "schemaVersion": "1.2.0",  # Bumped for power symbol support
             "source": os.path.basename(path),
             "circuitName": os.path.splitext(os.path.basename(path))[0],
             "components": filtered_components,
@@ -523,14 +605,16 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
             "titleBlock": title_info,
             "metadata": {
                 "parser": "kiutils",
-                "componentCount": len(components),
+                "componentCount": len(components) - power_symbol_count,  # Exclude power symbols from count
+                "powerSymbolCount": power_symbol_count,
                 "netCount": len(nets),
                 "generator": getattr(schematic, 'generator', 'unknown'),
                 "uuid": getattr(schematic, 'uuid', ''),
                 "enhanced": True,
                 "hasProperties": all(c['properties']['Reference'] for c in components),
                 "hasSpiceParams": any(c['spice']['params'] for c in components if c['spice']),
-                "hasConnectivity": all(len(c['pins']) > 0 for c in components)
+                "hasConnectivity": all(len(c['pins']) > 0 for c in components),
+                "hasPowerSymbols": power_symbol_count > 0
             }
         }
     except Exception as e:

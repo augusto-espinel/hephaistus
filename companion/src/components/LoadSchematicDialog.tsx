@@ -35,6 +35,8 @@ export function LoadSchematicDialog({
 
     try {
       await onLoad(path.trim())
+      // Close dialog immediately after successful load
+      // Parent will handle cleanup (clear history, etc.)
       setPath('')
       onClose()
     } catch (err) {

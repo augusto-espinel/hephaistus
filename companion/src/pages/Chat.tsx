@@ -31,7 +31,7 @@ export function Chat({
   // Use external or internal dialog state
   const showLoad = showLoadDialog || internalShowLoad
   const setShowLoad = onLoadDialogClose 
-    ? (show: boolean) => !show && onLoadDialogClose() 
+    ? (show: boolean) => { if (!show) onLoadDialogClose() } 
     : setInternalShowLoad
   
   // Shared app state (persists across tab switches)
@@ -170,10 +170,15 @@ export function Chat({
 
   const handleLoadSchematic = async (path: string) => {
     await loadSchematic(path)
-    refreshSession()
-    setLastResponse(null) // Clear previous response
-    setHistoryIndex(-1) // Reset history navigation
-    fetchHistory() // Load history for new project
+    // Schematic loaded successfully - caller will close dialog
+    // Now do cleanup/refresh in the background
+    setLastResponse(null)
+    setHistoryIndex(-1)
+    // Small delay to let dialog close animation start
+    setTimeout(() => {
+      refreshSession()
+      fetchHistory()
+    }, 50)
     emit(Events.SCHEMATIC_LOADED)
   }
 
