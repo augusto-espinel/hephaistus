@@ -238,6 +238,9 @@ class LLMOrchestrator:
         import json
         import re
         
+        # Handle None or empty content (e.g., tool_calls-only responses)
+        content = content or ""
+        
         proposal = PatchPlanProposal(raw_response=content)
         
         # Check for clarification

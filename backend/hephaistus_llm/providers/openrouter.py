@@ -183,7 +183,7 @@ class OpenRouterProvider:
         message = choice.get("message", {})
         usage = data.get("usage", {})
         
-        content = message.get("content", "")
+        content = message.get("content") or ""
         tool_calls = message.get("tool_calls", [])
         
         latency_ms = (time.time() - start_time) * 1000

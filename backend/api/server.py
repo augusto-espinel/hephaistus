@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 # Backend modules
@@ -384,7 +385,7 @@ async def get_schematic_state():
         component_count=session.schematic.component_count,
         net_count=session.schematic.net_count,
         components=session.schematic.components[:25],  # Limit for UI
-        nets=[{"name": n.get("name"), "pins": n.get("pins", [])} for n in session.schematic.nets[:10]],
+        nets=[{"name": n.get("name"), "pins": n.get("connectedPins", [])} for n in session.schematic.nets[:10]],
         directives=[{"type": d.get("directive_type"), "text": d.get("text")} for d in session.schematic.directives],
         last_modified=session.schematic.last_modified.isoformat() if session.schematic.last_modified else None,
         has_unsaved_changes=has_unsaved,
@@ -787,9 +788,10 @@ async def generate_patch_plan(request: GenerateRequest):
         context_service=service,
     )
     
-    # Generate
+    # Generate (run in thread pool to avoid blocking event loop)
     try:
-        proposal = orchestrator.generate(
+        proposal = await run_in_threadpool(
+            orchestrator.generate,
             user_request=request.request,
             include_full_simulation=request.include_full_simulation,
         )

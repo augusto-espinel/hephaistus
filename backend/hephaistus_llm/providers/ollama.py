@@ -221,7 +221,7 @@ class OllamaProvider:
         
         # Parse response
         message = data.get("message", {})
-        content = message.get("content", "")
+        content = message.get("content") or ""
         
         # Ollama provides eval counts
         prompt_eval_count = data.get("prompt_eval_count", 0)
@@ -284,7 +284,7 @@ class OllamaProvider:
                     try:
                         data = json.loads(line.decode("utf-8"))
                         message = data.get("message", {})
-                        content = message.get("content", "")
+                        content = message.get("content") or ""
                         if content:
                             yield content
                     except json.JSONDecodeError:

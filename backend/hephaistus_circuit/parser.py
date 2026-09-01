@@ -411,16 +411,37 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
         
         # Find unnamed nets - pins connected together without a label
         # Group pins by connectivity through wires and junctions
-        unnamed_pin_positions = {}  # position -> [(ref, pin_num), ...]
+        # Use a helper to normalize positions to KiCad precision (0.001mm)
+        # to avoid floating-point mismatch between computed pin positions and wire endpoints
+        def normalize_pos(pos, precision=0.001):
+            """Round position to KiCad precision to handle floating-point imprecision."""
+            return (round(pos[0] / precision) * precision,
+                    round(pos[1] / precision) * precision)
+        
+        unnamed_pin_positions = {}  # normalized position -> [(ref, pin_num), ...]
+        pin_to_normalized_pos = {}  # (ref, pin_num) -> normalized position for reverse lookup
         for comp in components:
             for pin in comp["pins"]:
                 if not pin["net"]:  # Unnamed pin
-                    pos = (pin.get("position", {}).get("x", 0), pin.get("position", {}).get("y", 0))
+                    raw_pos = (pin.get("position", {}).get("x", 0), pin.get("position", {}).get("y", 0))
+                    pos = normalize_pos(raw_pos)
                     if pos not in unnamed_pin_positions:
                         unnamed_pin_positions[pos] = []
                     unnamed_pin_positions[pos].append((comp["reference"], pin["number"]))
+                    pin_to_normalized_pos[(comp["reference"], pin["number"])] = pos
         
         # Propagate connectivity through wires for unnamed pins
+        # Normalize wire and junction positions to match pin precision
+        def normalize_wire_points(wire_pts, precision=0.001):
+            return [(round(p[0] / precision) * precision,
+                     round(p[1] / precision) * precision) for p in wire_pts]
+        
+        normalized_wire_segments = [
+            {"uuid": w["uuid"], "points": normalize_wire_points(w["points"])}
+            for w in wire_segments
+        ]
+        normalized_junction_positions = {normalize_pos(j) for j in junction_positions}
+        
         def find_connected_pins(start_pos, tolerance=0.5):
             """Find all pin positions connected to start_pos through wires and junctions."""
             connected_positions = set()
@@ -433,7 +454,7 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                 connected_positions.add(pos)
                 
                 # Find wires at this position
-                for wire in wire_segments:
+                for wire in normalized_wire_segments:
                     for wire_point in wire["points"]:
                         if abs(wire_point[0] - pos[0]) < tolerance and abs(wire_point[1] - pos[1]) < tolerance:
                             for point in wire["points"]:
@@ -442,9 +463,9 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                             break
                 
                 # Check junctions
-                for junc_pos in junction_positions:
+                for junc_pos in normalized_junction_positions:
                     if abs(junc_pos[0] - pos[0]) < tolerance and abs(junc_pos[1] - pos[1]) < tolerance:
-                        for wire in wire_segments:
+                        for wire in normalized_wire_segments:
                             for wire_point in wire["points"]:
                                 if abs(wire_point[0] - junc_pos[0]) < tolerance and abs(wire_point[1] - junc_pos[1]) < tolerance:
                                     for point in wire["points"]:
@@ -476,10 +497,20 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                 unnamed_net_groups.append(group_pins)
         
         # Generate names for unnamed nets
+        # IMPORTANT: Avoid collision with existing label names!
+        # Labels create NAMED nets (N$3, N$4, etc.) and we must not reuse
+        # those names for unnamed nets, or we'll incorrectly merge electrically
+        # separate nets.
+        existing_label_names = set(label_positions.values())
+        
         unnamed_counter = 1
         for group_pins in unnamed_net_groups:
-            net_name = f"N${unnamed_counter}"
-            unnamed_counter += 1
+            # Find next available name that doesn't collide with existing labels
+            while True:
+                net_name = f"N${unnamed_counter}"
+                unnamed_counter += 1
+                if net_name not in existing_label_names:
+                    break
             
             # Update component pins with net name
             for ref, pin_num in group_pins:
@@ -489,7 +520,7 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                             if pin["number"] == pin_num:
                                 pin["net"] = net_name
             
-            # Add to net_pins
+            # Add to net_pins (this is a NEW net, no collision possible)
             net_pins[net_name] = [f"{ref}.{pin_num}" for ref, pin_num in group_pins]
         
         # Build net objects with connected pins
@@ -504,6 +535,7 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
         for label in schematic.labels:
             net_name = label.text if label.text else ""
             if net_name:
+                pins_for_net = net_pins.get(net_name, [])
                 nets.append({
                     "name": net_name,
                     "uuid": getattr(label, 'uuid', 'unknown'),
@@ -512,7 +544,7 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                         "x": label.position.X,
                         "y": label.position.Y
                     },
-                    "connectedPins": filter_pwr_pins(net_pins.get(net_name, []))
+                    "connectedPins": filter_pwr_pins(pins_for_net)
                 })
         
         # Add power nets (from power symbols like power:GND)
