@@ -302,6 +302,9 @@ def apply_value_changes_text(content: str, value_changes: List[Dict[str, Any]]) 
     
     Preserves all KiCad formatting and properties.
     
+    For B-sources (behavioral sources), updates Sim.Params with model formula.
+    For regular components, updates the Value property.
+    
     Returns (modified_content, list_of_changes_applied).
     """
     changes_applied = []
@@ -310,6 +313,7 @@ def apply_value_changes_text(content: str, value_changes: List[Dict[str, Any]]) 
         uuid = change['uuid']
         new_value = change['new_value']
         reference = change.get('reference', 'unknown')
+        lib_id = change.get('lib_id', '')
         
         # Find the symbol block
         result = find_symbol_block(content, uuid)
@@ -319,16 +323,39 @@ def apply_value_changes_text(content: str, value_changes: List[Dict[str, Any]]) 
         
         start_pos, end_pos, symbol_block = result
         
-        # Replace the Value property
-        new_symbol_block = replace_property_value(symbol_block, 'Value', new_value)
+        # Detect B-source (behavioral source)
+        # B-sources have lib_id like "Simulation_SPICE:BSOURCE" or "pspice:BSOURCE"
+        # and references like B1, B2, etc.
+        is_bsource = (
+            ':BSOURCE' in lib_id.upper() or
+            reference.upper().startswith('B') or
+            'BSOURCE' in lib_id.upper()
+        )
         
-        if new_symbol_block is None:
-            changes_applied.append(f"WARNING: Could not find Value property for {reference}")
-            continue
-        
-        # Replace in content
-        content = content[:start_pos] + new_symbol_block + content[end_pos:]
-        changes_applied.append(f"Updated {reference}: {change['old_value']} → {new_value}")
+        if is_bsource:
+            # For B-sources, update Sim.Params with model formula
+            # Format: type="B" model="I=..." or type="B" model="V=..."
+            # The new_value should already include I= or V= prefix
+            model_value = new_value if new_value.startswith(('I=', 'V=')) else f'I={new_value}'
+            sim_params_value = f'type="B" model="{model_value}"'
+            new_symbol_block = replace_property_value(symbol_block, 'Sim.Params', sim_params_value)
+            
+            if new_symbol_block is None:
+                changes_applied.append(f"WARNING: Could not find Sim.Params property for B-source {reference}")
+                continue
+            
+            content = content[:start_pos] + new_symbol_block + content[end_pos:]
+            changes_applied.append(f"Updated B-source {reference} model: {model_value}")
+        else:
+            # Regular component: update Value property
+            new_symbol_block = replace_property_value(symbol_block, 'Value', new_value)
+            
+            if new_symbol_block is None:
+                changes_applied.append(f"WARNING: Could not find Value property for {reference}")
+                continue
+            
+            content = content[:start_pos] + new_symbol_block + content[end_pos:]
+            changes_applied.append(f"Updated {reference}: {change.get('old_value', '?')} → {new_value}")
     
     return content, changes_applied
 

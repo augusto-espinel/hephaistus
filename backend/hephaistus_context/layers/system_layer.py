@@ -52,13 +52,18 @@ A patch plan is a JSON object with schema, intent, and operations list.
    {"type": "simulation.remove_directive", "directive": "tran"}
    ```
 
-8. **component.update_value** — Update B-source formula (behavioral sources)
-   For B-sources (BSOURCE), the formula is in the Sim.Params field as `model="I=..."` or `model="V=..."`.
-   - **Run-time expressions**: Built-in variables (`time`, `temper`, `hertz`) and functions (`V(net)`, `I(branch)`) do NOT use braces.
-   - **Compile-time parameters**: Use `{param_name}` to reference `.param` defined values.
-   - Example (correct): `model="I=10*(1+0.5*sin(2*pi*5000*time))"` — no braces on `time`
-   - Example with params: `.param amp=0.5` → `model="I=10*(1+{amp}*sin(...))"` — braces on `{amp}`
-   - Use `component.update_value` with `value` containing the model string for B-sources.
+8. **component.update_value** — Update component value or B-source formula
+   ```json
+   {"type": "component.update_value", "reference": "R2", "value": "1.2"}
+   ```
+   For regular components (R, C, L, etc.): updates the `Value` property.
+   
+   **For B-sources (BSOURCE):** updates the `Sim.Params` property with the formula.
+   - Provide the formula as `value` with `I=...` or `V=...` prefix (e.g., `"I=10*(1+0.5*sin(2*pi*5000*time))"`).
+   - The system automatically formats it as `type="B" model="..."` in Sim.Params.
+   - **Run-time variables**: `time`, `temper`, `hertz`, `V(net)`, `I(branch)` — NO braces needed.
+   - **Compile-time parameters**: Use `{param_name}` for `.param` defined values.
+   - Example with params: `.param freq=5000` → formula `"I=sin(2*pi*{freq}*time)"`
 
 ### Validation Contract
 - All plans are validated: schema → semantics → integrity → round-trip
