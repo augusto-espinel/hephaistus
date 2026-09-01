@@ -54,8 +54,10 @@ A patch plan is a JSON object with schema, intent, and operations list.
 
 8. **component.update_value** — Update B-source formula (behavioral sources)
    For B-sources (BSOURCE), the formula is in the Sim.Params field as `model="I=..."` or `model="V=..."`.
-   - **CRITICAL**: Variables like `time` and node voltages `V(/net)` MUST be wrapped in curly braces: `{time}`, `{V(/net)}`.
-   - Example: `model="I=10*(1+0.5*sin(2*pi*{time}*5000))"`
+   - **Run-time expressions**: Built-in variables (`time`, `temper`, `hertz`) and functions (`V(net)`, `I(branch)`) do NOT use braces.
+   - **Compile-time parameters**: Use `{param_name}` to reference `.param` defined values.
+   - Example (correct): `model="I=10*(1+0.5*sin(2*pi*5000*time))"` — no braces on `time`
+   - Example with params: `.param amp=0.5` → `model="I=10*(1+{amp}*sin(...))"` — braces on `{amp}`
    - Use `component.update_value` with `value` containing the model string for B-sources.
 
 ### Validation Contract
