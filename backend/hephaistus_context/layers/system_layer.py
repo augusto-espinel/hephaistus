@@ -52,6 +52,12 @@ A patch plan is a JSON object with schema, intent, and operations list.
    {"type": "simulation.remove_directive", "directive": "tran"}
    ```
 
+8. **component.update_value** — Update B-source formula (behavioral sources)
+   For B-sources (BSOURCE), the formula is in the Sim.Params field as `model="I=..."` or `model="V=..."`.
+   - **CRITICAL**: Variables like `time` and node voltages `V(/net)` MUST be wrapped in curly braces: `{time}`, `{V(/net)}`.
+   - Example: `model="I=10*(1+0.5*sin(2*pi*{time}*5000))"`
+   - Use `component.update_value` with `value` containing the model string for B-sources.
+
 ### Validation Contract
 - All plans are validated: schema → semantics → integrity → round-trip
 - Round-trip validation: apply to temp copy, re-parse, verify before touching original
