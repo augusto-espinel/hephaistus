@@ -51,6 +51,7 @@ class ProviderConfig:
         api_key: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        timeout_seconds: Optional[float] = None,
         **kwargs
     ) -> "ProviderConfig":
         """Create OpenRouter configuration."""
@@ -60,6 +61,7 @@ class ProviderConfig:
             api_key=api_key or os.environ.get("OPENROUTER_API_KEY"),
             temperature=temperature,
             max_tokens=max_tokens,
+            timeout_seconds=timeout_seconds if timeout_seconds is not None else 120.0,
             extra_options=kwargs,
         )
     
@@ -70,6 +72,7 @@ class ProviderConfig:
         base_url: str = "http://localhost:11434",
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        timeout_seconds: Optional[float] = None,
         **kwargs
     ) -> "ProviderConfig":
         """Create Ollama configuration."""
@@ -79,6 +82,7 @@ class ProviderConfig:
             base_url=base_url,
             temperature=temperature,
             max_tokens=max_tokens,
+            timeout_seconds=timeout_seconds if timeout_seconds is not None else 120.0,
             extra_options=kwargs,
         )
     

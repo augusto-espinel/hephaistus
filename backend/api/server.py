@@ -139,6 +139,7 @@ class GenerateRequest(BaseModel):
     include_full_simulation: bool = False
     provider: str = "ollama"  # "ollama" or "openrouter"
     model: Optional[str] = None
+    timeout_seconds: Optional[float] = None  # Override default timeout (120s)
 
 
 class GenerateResponse(BaseModel):
@@ -775,10 +776,12 @@ async def generate_patch_plan(request: GenerateRequest):
     if request.provider == "openrouter":
         config = ProviderConfig.openrouter(
             model=request.model or "anthropic/claude-3.5-sonnet",
+            timeout_seconds=request.timeout_seconds,
         )
     else:
         config = ProviderConfig.ollama(
             model=request.model or "gemma4:e4b",
+            timeout_seconds=request.timeout_seconds,
         )
     
     # Create orchestrator with shared context service
