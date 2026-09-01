@@ -90,6 +90,34 @@ class SimulationDirective:
                 else:
                     self.parameters[part] = True
         
+        elif self.directive_type == "ic":
+            # .ic V(node1)=value1 V(node2)=value2 ...
+            self.parameters = {}
+            for part in params_str.split():
+                if "=" in part:
+                    # Handle V(/node)=value format
+                    match = re.match(r'(V\([^)]+\))\s*=\s*(.+)', part)
+                    if match:
+                        node_expr = match.group(1)
+                        value = match.group(2)
+                        self.parameters[node_expr] = value
+                    else:
+                        # Generic key=value
+                        key, value = part.split("=", 1)
+                        self.parameters[key] = value
+        
+        elif self.directive_type == "nodeset":
+            # .nodeset V(node)=value (similar to .ic)
+            self.parameters = {}
+            for part in params_str.split():
+                if "=" in part:
+                    match = re.match(r'(V\([^)]+\))\s*=\s*(.+)', part)
+                    if match:
+                        self.parameters[match.group(1)] = match.group(2)
+                    else:
+                        key, value = part.split("=", 1)
+                        self.parameters[key] = value
+        
         else:
             # Generic: store as raw string
             self.parameters = {"raw": params_str}
@@ -119,6 +147,16 @@ class SimulationDirective:
         elif self.directive_type == "options":
             opts = " ".join(f"{k}={v}" if isinstance(v, str) else k for k, v in self.parameters.items())
             return f".options {opts}"
+        
+        elif self.directive_type == "ic":
+            # .ic V(/node1)=value1 V(/node2)=value2
+            parts = [f"{k}={v}" for k, v in self.parameters.items()]
+            return f".ic {' '.join(parts)}" if parts else ".ic"
+        
+        elif self.directive_type == "nodeset":
+            # .nodeset V(/node)=value
+            parts = [f"{k}={v}" for k, v in self.parameters.items()]
+            return f".nodeset {' '.join(parts)}" if parts else ".nodeset"
         
         else:
             return self.text
@@ -236,7 +274,21 @@ def validate_directive_type(directive_type: str) -> bool:
     Returns:
         True if supported
     """
-    supported = {"tran", "ac", "dc", "op", "options", "param", "model", "include", "lib"}
+    supported = {
+        "tran",      # Transient analysis
+        "ac",        # AC analysis
+        "dc",        # DC sweep
+        "op",        # Operating point
+        "options",   # Simulation options
+        "param",     # Parameter definitions
+        "model",     # Model definitions
+        "include",   # Include files
+        "lib",       # Library includes
+        "ic",        # Initial conditions
+        "nodeset",   # Node voltage hints
+        "save",      # Save variables
+        "probe",     # Probe variables
+    }
     return directive_type.lower() in supported
 
 
