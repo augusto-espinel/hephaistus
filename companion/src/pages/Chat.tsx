@@ -111,6 +111,8 @@ export function Chat({
       request: request.trim(),
       provider: llmSelection.provider as 'ollama' | 'openrouter',
       model: llmSelection.model,
+      // OpenRouter needs longer timeout for large models (network + inference)
+      timeout_seconds: llmSelection.provider === 'openrouter' ? 300 : undefined,
     })
     
     // Persist response to shared state so it survives tab switches
@@ -141,6 +143,8 @@ export function Chat({
           request: result.prompt,
           provider: llmSelection.provider as 'ollama' | 'openrouter',
           model: llmSelection.model,
+          // OpenRouter needs longer timeout for large models (network + inference)
+          timeout_seconds: llmSelection.provider === 'openrouter' ? 300 : undefined,
         })
         
         if (llmResult) {

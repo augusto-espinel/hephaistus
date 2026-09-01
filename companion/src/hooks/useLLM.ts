@@ -7,6 +7,7 @@ export interface GenerateRequest {
   include_full_simulation?: boolean
   provider?: 'ollama' | 'openrouter'
   model?: string | null
+  timeout_seconds?: number  // Override default 120s timeout for complex requests
 }
 
 export interface GenerateResponse {
