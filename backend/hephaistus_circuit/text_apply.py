@@ -259,12 +259,22 @@ def replace_property_value(symbol_block: str, property_name: str, new_value: str
     # Now we're at the start of the value
     # It could be quoted or unquoted
     if symbol_block[after_name] == '"':
-        # Quoted value - find the closing quote
+        # Quoted value - find the closing quote (handling escaped quotes)
         value_start = after_name
-        value_end = symbol_block.find('"', value_start + 1)
-        if value_end == -1:
+        i = value_start + 1
+        while i < len(symbol_block):
+            if symbol_block[i] == '\\' and i + 1 < len(symbol_block) and symbol_block[i + 1] == '"':
+                # Escaped quote - skip both characters
+                i += 2
+            elif symbol_block[i] == '"':
+                # Found the closing quote
+                value_end = i + 1
+                break
+            else:
+                i += 1
+        else:
+            # No closing quote found
             return None
-        value_end += 1  # Include closing quote
         
         # Replace the value
         old_value_str = symbol_block[value_start:value_end]
@@ -337,7 +347,9 @@ def apply_value_changes_text(content: str, value_changes: List[Dict[str, Any]]) 
             # Format: type="B" model="I=..." or type="B" model="V=..."
             # The new_value should already include I= or V= prefix
             model_value = new_value if new_value.startswith(('I=', 'V=')) else f'I={new_value}'
-            sim_params_value = f'type="B" model="{model_value}"'
+            # KiCad requires quotes inside the string to be escaped
+            # So type="B" model="I=..." becomes "type=\"B\" model=\"I=...\""
+            sim_params_value = f'type=\"B\" model=\"{model_value}\"'
             new_symbol_block = replace_property_value(symbol_block, 'Sim.Params', sim_params_value)
             
             if new_symbol_block is None:
@@ -784,13 +796,12 @@ def find_existing_symbols_bounds(content: str) -> Tuple[float, float, float, flo
     
     Returns (min_x, min_y, max_x, max_y).
     Used for staging new components.
+    
+    IMPORTANT: Only uses the symbol's position (at x y angle), not property positions.
+    Property positions can be offset from the symbol position and would skew the bounds.
     """
     min_x, min_y = float('inf'), float('inf')
     max_x, max_y = float('-inf'), float('-inf')
-    
-    # Find all (at x y angle) within symbol instances
-    # Symbol instances are (symbol (lib_id ...)) blocks
-    at_pattern = r'\(at\s+([\d.\-]+)\s+([\d.\-]+)\s+[\d.\-]+\)'
     
     # Find all symbol instance blocks
     symbol_pattern = r'\(symbol\s+\(lib_id'
@@ -810,9 +821,11 @@ def find_existing_symbols_bounds(content: str) -> Tuple[float, float, float, flo
                     end = i + 1
                     break
         
-        # Extract positions from this symbol block
+        # Extract the SYMBOL's position (first (at x y angle) in the block)
+        # This is the symbol's position, NOT property positions which come after
         symbol_block = content[start:end]
-        for at_match in re.finditer(at_pattern, symbol_block):
+        at_match = re.search(r'\(at\s+([\d.\-]+)\s+([\d.\-]+)\s+[\d.\-]+\)', symbol_block)
+        if at_match:
             x = float(at_match.group(1))
             y = float(at_match.group(2))
             min_x = min(min_x, x)
@@ -846,9 +859,20 @@ def create_symbol_instance(lib_symbol_block: str,
     1. Takes the library symbol as a template
     2. Replaces the symbol name with an instance
     3. Sets position, UUID, reference, and value
-    4. Preserves all KiCad 10 properties
+    4. Copies SPICE simulation properties from library symbol (Sim.* props)
+    5. Preserves all KiCad 10 properties
     
     Note: This creates a STUB - user must wire in KiCad.
+    
+    SPICE Property Inheritance:
+    KiCad does NOT automatically copy Sim.* properties from library symbols to instances.
+    For SPICE symbols (Sim.Device = SUBCKT, etc.), we MUST copy these properties to make
+    the instance self-contained for simulation:
+    - Sim.Device: Device type (SUBCKT, X, etc.)
+    - Sim.Library: Path to SPICE library file
+    - Sim.Name: Subcircuit/model name
+    - Sim.Pins: Pin-to-SPICE node mapping
+    - Sim.Params: Optional parameters
     """
     # The library symbol looks like:
     # (symbol "Device:C" (property "Reference" "C") ...)
@@ -867,6 +891,16 @@ def create_symbol_instance(lib_symbol_block: str,
     # For KiCad 10, symbol instances have a different structure
     # They reference the library symbol and have instance-specific properties
     
+    # Extract SPICE properties from library symbol block
+    # These must be copied to instance for simulation symbols
+    spice_props = {}
+    for prop_name in ['Sim.Device', 'Sim.Type', 'Sim.Params', 'Sim.Pins', 'Sim.Library', 'Sim.Name']:
+        # Pattern: (property "Sim.Device" "SUBCKT" ...)
+        pattern = rf'\(property\s+"{re.escape(prop_name)}"\s+"([^"]*)"'
+        match = re.search(pattern, lib_symbol_block)
+        if match:
+            spice_props[prop_name] = match.group(1)
+    
     # Build the symbol instance
     # KiCad 10 format:
     # (symbol (lib_id "Device:C") (at x y angle) (uuid "...") 
@@ -881,11 +915,9 @@ def create_symbol_instance(lib_symbol_block: str,
     # The safest approach: create a minimal instance that references the library symbol
     
     # KiCad 10 symbol instance format:
-    instance = f'''(symbol
-		(lib_id "{lib_id}")
-		(at {position[0]:.2f} {position[1]:.2f} 0)
-		(uuid "{new_uuid}")
-		(property "Reference" "{reference}"
+    # Build base instance with required properties
+    property_blocks = []
+    property_blocks.append(f'''		(property "Reference" "{reference}"
 			(at {position[0]:.2f} {position[1] + 1.27:.2f} 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -894,8 +926,9 @@ def create_symbol_instance(lib_symbol_block: str,
 					(size 1.27 1.27)
 				)
 			)
-		)
-		(property "Value" "{value}"
+		)''')
+    
+    property_blocks.append(f'''		(property "Value" "{value}"
 			(at {position[0]:.2f} {position[1] - 1.27:.2f} 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -904,8 +937,9 @@ def create_symbol_instance(lib_symbol_block: str,
 					(size 1.27 1.27)
 				)
 			)
-		)
-		(property "Footprint" ""
+		)''')
+    
+    property_blocks.append(f'''		(property "Footprint" ""
 			(at {position[0]:.2f} {position[1]:.2f} 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -915,8 +949,9 @@ def create_symbol_instance(lib_symbol_block: str,
 					(size 1.27 1.27)
 				)
 			)
-		)
-		(property "Datasheet" ""
+		)''')
+    
+    property_blocks.append(f'''		(property "Datasheet" ""
 			(at {position[0]:.2f} {position[1]:.2f} 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -926,7 +961,31 @@ def create_symbol_instance(lib_symbol_block: str,
 					(size 1.27 1.27)
 				)
 			)
-		)
+		)''')
+    
+    # Add SPICE properties if present in library symbol
+    # These are CRITICAL for simulation - without them, subcircuits won't be found
+    for prop_name in ['Sim.Device', 'Sim.Type', 'Sim.Params', 'Sim.Pins', 'Sim.Library', 'Sim.Name']:
+        if prop_name in spice_props:
+            property_blocks.append(f'''		(property "{prop_name}" "{spice_props[prop_name]}"
+			(at {position[0]:.2f} {position[1]:.2f} 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)''')
+    
+    # Build complete instance
+    properties_text = '\n'.join(property_blocks)
+    instance = f'''(symbol
+		(lib_id "{lib_id}")
+		(at {position[0]:.2f} {position[1]:.2f} 0)
+		(uuid "{new_uuid}")
+{properties_text}
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)

@@ -308,7 +308,7 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
             entry_name = getattr(symbol, 'entryName', '') or ''
             lib_id = f"{lib_nickname}:{entry_name}" if lib_nickname else entry_name
             
-            # Find library symbol for pin positions
+            # Find library symbol for pin positions AND inherited properties
             lib_sym = lib_symbols.get(lib_id)
             
             # Extract position from symbol.position object
@@ -323,13 +323,23 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                 if hasattr(symbol.position, 'angle'):
                     angle = symbol.position.angle
             
-            # Extract SPICE simulation properties
+            # Merge library properties with instance properties
+            # Library properties provide defaults; instance properties override
+            lib_props = {}
+            if lib_sym and hasattr(lib_sym, 'properties'):
+                lib_props = {p.key: p.value for p in lib_sym.properties}
+            
+            # Instance properties override library defaults
+            merged_props = {**lib_props, **props}
+            
+            # Extract SPICE simulation properties from merged properties
+            # This ensures SPICE symbols inherit Sim.* props from library definition
             spice_props = {
-                "device": props.get('Sim.Device', ''),
-                "type": props.get('Sim.Type', ''),
-                "params": props.get('Sim.Params', ''),
-                "pins": props.get('Sim.Pins', ''),
-                "library": props.get('Sim.Library', ''),
+                "device": merged_props.get('Sim.Device', ''),
+                "type": merged_props.get('Sim.Type', ''),
+                "params": merged_props.get('Sim.Params', ''),
+                "pins": merged_props.get('Sim.Pins', ''),
+                "library": merged_props.get('Sim.Library', ''),
             }
             
             # Extract pins with net connectivity
@@ -361,11 +371,14 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                     "Value": props.get('Value', ''),
                     "Footprint": props.get('Footprint', ''),
                     "Datasheet": props.get('Datasheet', ''),
-                    "Description": props.get('Description', ''),
-                    "Sim.Device": props.get('Sim.Device', ''),
-                    "Sim.Type": props.get('Sim.Type', ''),
-                    "Sim.Params": props.get('Sim.Params', ''),
-                    "Sim.Pins": props.get('Sim.Pins', '')
+                    "Description": merged_props.get('Description', ''),
+                    # SPICE properties: use merged (instance overrides library)
+                    "Sim.Device": merged_props.get('Sim.Device', ''),
+                    "Sim.Type": merged_props.get('Sim.Type', ''),
+                    "Sim.Params": merged_props.get('Sim.Params', ''),
+                    "Sim.Pins": merged_props.get('Sim.Pins', ''),
+                    "Sim.Library": merged_props.get('Sim.Library', ''),
+                    "Sim.Name": merged_props.get('Sim.Name', ''),
                 },
                 "spice": spice_props,
                 "pins": pins,
