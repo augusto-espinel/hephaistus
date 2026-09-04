@@ -1892,7 +1892,8 @@ def apply_component_addition_text(content: str, added_components: List[Dict[str,
                 
                 pd = pin_defs.get(str(pin_num))
                 if pd:
-                    pin_abs = (position[0] + pd[0], position[1] + pd[1])
+                    # Negate Y: library coords are Y-UP, schematic coords are Y-DOWN
+                    pin_abs = (position[0] + pd[0], position[1] - pd[1])
                     direction = _stub_direction_from_lib_angle(pd[2])
                 else:
                     pin_abs = (position[0], position[1])
