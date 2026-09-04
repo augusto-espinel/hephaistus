@@ -184,6 +184,9 @@ class OpenRouterProvider:
         usage = data.get("usage", {})
         
         content = message.get("content") or ""
+        # OpenRouter uses "reasoning" field for DeepSeek V4, etc.
+        # (not "reasoning_content" as native DeepSeek API does)
+        reasoning_content = message.get("reasoning") or None
         tool_calls = message.get("tool_calls", [])
         
         latency_ms = (time.time() - start_time) * 1000
@@ -198,6 +201,7 @@ class OpenRouterProvider:
             latency_ms=latency_ms,
             tool_calls=tool_calls,
             metadata={"response_id": data.get("id")},
+            reasoning_content=reasoning_content,
         )
     
     async def stream(

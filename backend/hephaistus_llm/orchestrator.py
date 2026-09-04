@@ -125,6 +125,10 @@ def _extract_thinking_blocks(content: str) -> tuple:
     - DeepSeek-R1: <think>...</think>
     - Some models: <thinking>...</thinking>
     
+    IMPORTANT: Some models (e.g., DeepSeek) put their ENTIRE output including
+    the answer JSON inside the thinking tags. We must still parse the JSON from
+    the thinking content in that case.
+    
     Returns:
         (thinking_content, display_content) tuple where:
         - thinking_content: extracted reasoning text (empty string if none found)
@@ -150,6 +154,27 @@ def _extract_thinking_blocks(content: str) -> tuple:
         display_content = re.sub(thinking_pattern, '[reasoning...]', display_content, flags=re.DOTALL)
     
     thinking_content = '\n'.join(thinking_parts).strip() if thinking_parts else ""
+    
+    # If thinking content contains the actual answer (JSON patch-plan, explanation, etc.)
+    # but display_content is now just "[reasoning...]", extract the non-reasoning part
+    # from the thinking block as the display content.
+    if thinking_content and display_content.strip() in ('[reasoning...]', ''):
+        # Try to split the thinking content into reasoning and answer parts.
+        # Common patterns where the answer follows the reasoning:
+        # 1. JSON block: ```json ... ```
+        # 2. Natural language after a clear separator
+        json_pattern = r'(```json\s*[\s\S]*?\s*```)'
+        json_matches = re.findall(json_pattern, thinking_content)
+        if json_matches:
+            # The JSON blocks are the actual answer — extract them as display content
+            # Keep everything from the first JSON block onwards as display content
+            first_json_pos = re.search(json_pattern, thinking_content)
+            if first_json_pos:
+                answer_part = thinking_content[first_json_pos.start():].strip()
+                # The reasoning part is everything before the JSON
+                reasoning_part = thinking_content[:first_json_pos.start()].strip()
+                thinking_content = reasoning_part
+                display_content = answer_part
     
     return thinking_content, display_content
 
@@ -301,18 +326,22 @@ class LLMOrchestrator:
         # Call LLM
         response = self._provider.complete(messages, llm_config)
         
-        # Parse response
-        return self._parse_response(response.content)
+        # Parse response (pass reasoning_content if available from provider)
+        return self._parse_response(response.content, reasoning_content=response.reasoning_content)
     
-    def _parse_response(self, content: str) -> PatchPlanProposal:
+    def _parse_response(self, content: str, reasoning_content: Optional[str] = None) -> PatchPlanProposal:
         """
         Parse LLM response to extract patch-plan or clarification.
         
         Handles models that output think-tag reasoning blocks
         (like DeepSeek-R1) by extracting them separately.
         
+        Also supports models that return reasoning in a separate
+        `reasoning_content` field (DeepSeek V4 via OpenRouter, etc.).
+        
         Args:
             content: Raw LLM response content
+            reasoning_content: Optional reasoning from provider's separate field
             
         Returns:
             PatchPlanProposal with parsed content
@@ -324,7 +353,7 @@ class LLMOrchestrator:
         content = content or ""
         
         # Guard: empty response after stripping indicates LLM failure
-        if not content.strip():
+        if not content.strip() and not (reasoning_content and reasoning_content.strip()):
             raise RuntimeError(
                 "LLM returned empty response. This usually indicates a timeout, "
                 "rate limit, or server error. Please check your provider status "
@@ -334,13 +363,19 @@ class LLMOrchestrator:
         
         proposal = PatchPlanProposal(raw_response=content)
         
-        # Extract thinking/reasoning blocks (for models like DeepSeek-R1)
-        thinking_content, display_content = _extract_thinking_blocks(content)
-        proposal.thinking_content = thinking_content
-        proposal.display_response = display_content
-        
-        # Use display_content for further parsing (thinking blocks removed)
-        parse_content = display_content
+        # If the provider returned reasoning_content separately (e.g., DeepSeek V4
+        # via OpenRouter), use it directly — this is more reliable than parsing tags.
+        if reasoning_content and reasoning_content.strip():
+            proposal.thinking_content = reasoning_content.strip()
+            # content is the answer (without reasoning), use it directly
+            proposal.display_response = content.strip()
+            parse_content = content.strip()
+        else:
+            # Fall back to tag-based extraction (for older DeepSeek-R1, <thinking> tags, etc.)
+            thinking_extracted, display_content = _extract_thinking_blocks(content)
+            proposal.thinking_content = thinking_extracted
+            proposal.display_response = display_content
+            parse_content = display_content
         
         # Check for clarification
         clarification_markers = [

@@ -30,6 +30,11 @@ A patch plan is a JSON object with schema, intent, and operations list.
    ```json
    {"type": "component.add", "component": {"reference": "R3", "lib_id": "Device:R", "value": "0.001", "pins": {"1": "dc_plus", "2": "dc_plus_shunt"}}}
    ```
+   
+   **For B-sources (BSOURCE):** the `value` field contains the formula (not "B" or "BSOURCE"):
+   - Formula format: `I=...` or `V=...` (e.g., `"I=10*sin(2*pi*{freq}*time)"`).
+   - The system automatically detects `:BSOURCE` in `lib_id` and routes `value` to `Sim.Params`.
+   - Example: `{"reference": "B_gate6", "lib_id": "Simulation_SPICE:BSOURCE", "value": "V=15*(time<{ton}?1:0)", "pins": {"1": "gate_hi", "2": "emitter"}}}`
 
 4. **component.update_value** — Update a component's value
    ```json

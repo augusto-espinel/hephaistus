@@ -107,13 +107,15 @@ class LLMResponse:
     latency_ms: float = 0.0
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Reasoning content from models that return it separately (DeepSeek, etc.)
+    reasoning_content: Optional[str] = None
     
     @property
     def total_tokens(self) -> int:
         return self.usage_input_tokens + self.usage_output_tokens
     
     def to_dict(self) -> dict:
-        return {
+        result = {
             "content": self.content,
             "model": self.model,
             "provider": self.provider,
@@ -123,6 +125,9 @@ class LLMResponse:
             "latency_ms": self.latency_ms,
             "tool_calls": self.tool_calls,
         }
+        if self.reasoning_content:
+            result["reasoning_content"] = self.reasoning_content
+        return result
 
 
 @runtime_checkable
