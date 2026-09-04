@@ -244,19 +244,105 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                     # Junction connects wires, propagate to all wires at junction
                     pass  # Already handled by propagate_net_label
         
-        # Function to find net at a position
-        def find_net_at_position(pos, tolerance=0.5):
-            """Find net name at a given position."""
-            # Check net coverage (propagated positions)
+        # Function to find net at a position or near a pin line segment
+        def find_net_at_position(pin_info, tolerance=0.5):
+            """Find net name near a pin's line segment (body to tip).
+            
+            pin_info can be:
+            - (x, y) for single point check (backward compatible)
+            - (body_x, body_y, tip_x, tip_y, pin_name) for pin line segment check
+            - (body_x, body_y, tip_x, tip_y) for pin line segment check
+            
+            KiCad connects a wire to a pin if the wire touches any part
+            of the pin graphic (the line from body to tip).
+            """
+            if len(pin_info) == 2:
+                # Legacy: single point
+                px, py = pin_info
+                # Check net coverage
+                for net_name, positions in net_coverage.items():
+                    for net_pos in positions:
+                        if abs(net_pos[0] - px) < tolerance and abs(net_pos[1] - py) < tolerance:
+                            return net_name
+                # Check junctions
+                for junc_pos in junction_positions:
+                    if abs(junc_pos[0] - px) < tolerance and abs(junc_pos[1] - py) < tolerance:
+                        for net_name, positions in net_coverage.items():
+                            if junc_pos in positions:
+                                return net_name
+                return ""
+            
+            # Pin line segment: check proximity to entire line from body to tip
+            body_x, body_y, tip_x, tip_y = pin_info[0], pin_info[1], pin_info[2], pin_info[3]
+            
+            # Check net coverage against both endpoints and intermediate points
             for net_name, positions in net_coverage.items():
                 for net_pos in positions:
-                    if abs(net_pos[0] - pos[0]) < tolerance and abs(net_pos[1] - pos[1]) < tolerance:
+                    # Check if net_pos is near the pin line segment
+                    nx, ny = net_pos
+                    
+                    # Quick check: near body or tip endpoint?
+                    if abs(nx - body_x) < tolerance and abs(ny - body_y) < tolerance:
+                        return net_name
+                    if abs(nx - tip_x) < tolerance and abs(ny - tip_y) < tolerance:
+                        return net_name
+                    
+                    # Check if point lies ON the pin line segment
+                    # Line segment: (body_x, body_y) to (tip_x, tip_y)
+                    # Point is on segment if it's within tolerance of the infinite line
+                    # AND between the endpoints
+                    
+                    dx = tip_x - body_x
+                    dy = tip_y - body_y
+                    seg_len = math.sqrt(dx*dx + dy*dy)
+                    
+                    if seg_len < 0.001:
+                        continue
+                    
+                    # Distance from point to line segment
+                    # Parametric form: P(t) = body + t*(tip-body), t in [0,1]
+                    # Project net_pos onto the line
+                    t = ((nx - body_x) * dx + (ny - body_y) * dy) / (seg_len * seg_len)
+                    
+                    # Clamp to segment
+                    t = max(0, min(1, t))
+                    
+                    closest_x = body_x + t * dx
+                    closest_y = body_y + t * dy
+                    dist = math.sqrt((nx - closest_x)**2 + (ny - closest_y)**2)
+                    
+                    if dist < tolerance:
                         return net_name
             
-            # Also check junctions - they connect multiple nets
+            # Check junctions against the pin line segment
             for junc_pos in junction_positions:
-                if abs(junc_pos[0] - pos[0]) < tolerance and abs(junc_pos[1] - pos[1]) < tolerance:
-                    # Find which nets touch this junction
+                jx, jy = junc_pos
+                # Quick check: near body or tip?
+                if abs(jx - body_x) < tolerance and abs(jy - body_y) < tolerance:
+                    for net_name, positions in net_coverage.items():
+                        if junc_pos in positions:
+                            return net_name
+                if abs(jx - tip_x) < tolerance and abs(jy - tip_y) < tolerance:
+                    for net_name, positions in net_coverage.items():
+                        if junc_pos in positions:
+                            return net_name
+                
+                # Check if junction lies on pin line segment
+                dx = tip_x - body_x
+                dy = tip_y - body_y
+                seg_len = math.sqrt(dx*dx + dy*dy)
+                
+                if seg_len < 0.001:
+                    continue
+                
+                t = ((jx - body_x) * dx + (jy - body_y) * dy) / (seg_len * seg_len)
+                t = max(0, min(1, t))
+                
+                closest_x = body_x + t * dx
+                closest_y = body_y + t * dy
+                dist = math.sqrt((jx - closest_x)**2 + (jy - closest_y)**2)
+                
+                if dist < tolerance:
                     for net_name, positions in net_coverage.items():
                         if junc_pos in positions:
                             return net_name
@@ -265,9 +351,32 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
         
         # Function to get pin position from libSymbol
         def get_pin_position(lib_sym, pin_num, symbol_pos, symbol_angle=0):
-            """Get absolute pin position from libSymbol and symbol placement."""
+            """Get absolute pin position from libSymbol and symbol placement.
+            
+            Returns: (body_x, body_y, tip_x, tip_y, pin_name)
+            pin_name is the electrical name from the library (e.g., "C", "G", "E" or "").
+            
+            KiCad coordinate system note:
+            - Library symbols use Y-UP (Cartesian) coordinates
+            - Schematics use Y-DOWN (screen) coordinates
+            - The Y coordinate must be NEGATED when transforming from library
+              to schematic space: schematic_y = symbol_y - library_y
+            
+            Pin definition in library: (at X Y angle) (length L)
+            - (X, Y) is where the pin attaches to the symbol body (in Y-up coords)
+            - angle is the direction the pin extends OUTWARD from the body
+            - The pin graphic runs from body (X,Y) to tip (X+L*cos(a), Y+L*sin(a))
+            
+            For wire connectivity, KiCad considers a pin connected if a wire
+            touches any part of the pin graphic line (body to tip). We compute
+            both body and tip positions in schematic coordinates to enable
+            line-segment proximity checks in find_net_at_position.
+            """
             # Find the pin in libSymbol
             pin_pos_rel = (0, 0)
+            pin_length = 0
+            pin_angle = 0
+            pin_name = ""
             
             # libSymbol has pins in units[1].pins for the main unit
             if hasattr(lib_sym, 'units') and lib_sym.units:
@@ -275,15 +384,21 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                     if hasattr(unit, 'pins') and unit.pins:
                         for pin in unit.pins:
                             if pin.number == pin_num:
-                                # Pin position relative to symbol origin
+                                # Pin body position relative to symbol origin (Y-up)
                                 pin_pos_rel = (pin.position.X, pin.position.Y)
+                                pin_length = pin.length if hasattr(pin, 'length') else 0
+                                pin_angle = pin.position.angle if hasattr(pin.position, 'angle') else 0
+                                pin_name = pin.name if hasattr(pin, 'name') else ''
                                 break
             
-            # Apply rotation transformation
-            # Rotation is counter-clockwise in KiCad
-            # cos(a) -sin(a)   x     x*cos(a) - y*sin(a)
-            # sin(a)  cos(a)   y  =  x*sin(a) + y*cos(a)
-            x, y = pin_pos_rel
+            # Convert library body position to schematic Y-down coordinates
+            # Library Y-up → Schematic Y-down: negate Y
+            body_sch_x = pin_pos_rel[0]
+            body_sch_y = -pin_pos_rel[1]
+            
+            # Apply rotation transformation to body position
+            # Rotation is counter-clockwise in KiCad (standard math convention)
+            x, y = body_sch_x, body_sch_y
             if symbol_angle != 0:
                 angle_rad = math.radians(symbol_angle)
                 cos_a = math.cos(angle_rad)
@@ -292,8 +407,35 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                 y_rot = x * sin_a + y * cos_a
                 x, y = x_rot, y_rot
             
-            # Apply translation (symbol position)
-            return (symbol_pos[0] + x, symbol_pos[1] + y)
+            # Apply translation (symbol position in schematic coords)
+            abs_body_x = symbol_pos[0] + x
+            abs_body_y = symbol_pos[1] + y
+            
+            # Also compute tip (connection endpoint) for line-segment checks
+            if pin_length > 0:
+                # In library Y-up, tip = body + length * direction(angle)
+                tip_lib_x = pin_pos_rel[0] + pin_length * math.cos(math.radians(pin_angle))
+                tip_lib_y = pin_pos_rel[1] + pin_length * math.sin(math.radians(pin_angle))
+                # Convert to schematic Y-down
+                tip_sch_x = tip_lib_x
+                tip_sch_y = -tip_lib_y
+                # Apply rotation
+                tx, ty = tip_sch_x, tip_sch_y
+                if symbol_angle != 0:
+                    angle_rad = math.radians(symbol_angle)
+                    cos_a = math.cos(angle_rad)
+                    sin_a = math.sin(angle_rad)
+                    tx_rot = tx * cos_a - ty * sin_a
+                    ty_rot = tx * sin_a + ty * cos_a
+                    tx, ty = tx_rot, ty_rot
+                abs_tip_x = symbol_pos[0] + tx
+                abs_tip_y = symbol_pos[1] + ty
+                # Return body position (primary) and tip (secondary)
+                # The find_net_at_position function should check proximity
+                # to the pin line segment from body to tip
+                return (abs_body_x, abs_body_y, abs_tip_x, abs_tip_y, pin_name)
+            
+            return (abs_body_x, abs_body_y, abs_body_x, abs_body_y, pin_name)
         
         components = []
         
@@ -346,17 +488,18 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
             pins = []
             if hasattr(symbol, 'pins') and symbol.pins:
                 for pin_num, pin_uuid in symbol.pins.items():
-                    # Get absolute pin position (with rotation)
-                    pin_pos = get_pin_position(lib_sym, pin_num, (position['x'], position['y']), angle) if lib_sym else (position['x'], position['y'])
+                    # Get absolute pin positions (body and tip) with rotation and pin name
+                    pin_info = get_pin_position(lib_sym, pin_num, (position['x'], position['y']), angle) if lib_sym else (position['x'], position['y'], position['x'], position['y'], '')
                     
-                    # Find net at this position
-                    net_name = find_net_at_position(pin_pos)
+                    # Find net near the pin line segment
+                    net_name = find_net_at_position(pin_info)
                     
                     pins.append({
                         "number": pin_num,
                         "uuid": pin_uuid,
+                        "name": pin_info[4],  # Pin name from library
                         "net": net_name,
-                        "position": {"x": pin_pos[0], "y": pin_pos[1]}
+                        "position": {"x": pin_info[0], "y": pin_info[1]}
                     })
             
             comp = {
@@ -516,14 +659,47 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
         # separate nets.
         existing_label_names = set(label_positions.values())
         
-        unnamed_counter = 1
+        # Use KiCad's Net-(Ref-PadName) convention for unnamed nets.
+        # This ensures parser net names match what appears in simulation logs
+        # and netlist exports, so the LLM can cross-reference them.
+        #
+        # Convention:
+        #   Pin name empty/numeric → Net-(Ref-Pad1)
+        #   Pin name non-numeric  → Net-(Ref-Name)  e.g. Net-(B_gate3-N+)
+        #
+        # We pick the alphabetically first (ref, pin) on the net as the
+        # canonical name, matching KiCad's deterministic ordering.
+        
+        # Build a lookup: (ref, pin_num) -> pin_name
+        pin_name_lookup = {}
+        for comp in components:
+            for pin in comp.get("pins", []):
+                pin_name_lookup[(comp["reference"], pin["number"])] = pin.get("name", "")
+        
+        def kicad_net_name(ref, pin_num):
+            """Generate KiCad-compatible net name for an unnamed net."""
+            p_name = pin_name_lookup.get((ref, pin_num), "")
+            # KiCad uses the pin name; if empty or numeric, use Pad<pin_num>
+            if not p_name or p_name.isdigit():
+                pad_id = f"Pad{pin_num}"
+            else:
+                pad_id = p_name
+            return f"Net-({ref}-{pad_id})"
+        
         for group_pins in unnamed_net_groups:
-            # Find next available name that doesn't collide with existing labels
-            while True:
-                net_name = f"N${unnamed_counter}"
-                unnamed_counter += 1
-                if net_name not in existing_label_names:
-                    break
+            # Sort to get deterministic "first pin" (matches KiCad's ordering)
+            sorted_pins = sorted(group_pins, key=lambda x: (x[0], int(x[1]) if x[1].isdigit() else x[1]))
+            ref, pin_num = sorted_pins[0]
+            net_name = kicad_net_name(ref, pin_num)
+            
+            # Avoid collision with existing label names
+            if net_name in existing_label_names:
+                # Fallback: try subsequent pins in the group
+                for ref2, pin_num2 in sorted_pins[1:]:
+                    candidate = kicad_net_name(ref2, pin_num2)
+                    if candidate not in existing_label_names:
+                        net_name = candidate
+                        break
             
             # Update component pins with net name
             for ref, pin_num in group_pins:
@@ -533,8 +709,21 @@ def parse_with_kiutils(path: str) -> Optional[Dict[str, Any]]:
                             if pin["number"] == pin_num:
                                 pin["net"] = net_name
             
-            # Add to net_pins (this is a NEW net, no collision possible)
+            # Add to net_pins
             net_pins[net_name] = [f"{ref}.{pin_num}" for ref, pin_num in group_pins]
+        
+        # ============================================================
+        # Note: No Net Merge Through Components
+        # ============================================================
+        # KiCad's netlist assigns nets purely based on WIRES, not through
+        # component electrical connectivity. If a resistor bridges two
+        # separate wire islands, those remain DIFFERENT nets in KiCad's
+        # model. The parser must faithfully reproduce this behavior.
+        #
+        # For simulation purposes, the LLM orchestration layer may later
+        # decide to treat certain low-value components as shorts, but
+        # the parser's job is to report the physical wire connectivity.
+        # ============================================================
         
         # Build net objects with connected pins
         nets = []

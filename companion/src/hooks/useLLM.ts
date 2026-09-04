@@ -18,6 +18,10 @@ export interface GenerateResponse {
   clarification_question: string | null
   parse_error: string | null
   is_valid: boolean
+  // Thinking/reasoning blocks extracted from response (DeepSeek-R1, etc.)
+  thinking_content: string | null
+  // Display-friendly response with thinking blocks condensed
+  display_response: string | null
 }
 
 export function useLLM() {

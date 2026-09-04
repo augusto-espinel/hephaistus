@@ -1939,3 +1939,66 @@ button.modify {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Collapsible thinking/reasoning blocks */
+.thinking-block {
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.thinking-block summary {
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.thinking-block summary:hover {
+  background: var(--bg-hover);
+}
+
+.thinking-block .thinking-content {
+  padding: 0.75rem;
+  border-top: 1px solid var(--border);
+  max-height: 400px;
+  overflow-y: auto;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+/* Collapsible code/JSON blocks */
+.collapsible-code-block {
+  margin: 0.75rem 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.collapsible-code-block summary {
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.collapsible-code-block summary:hover {
+  background: var(--bg-hover);
+}
+
+.collapsible-code-block pre {
+  margin: 0;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  max-height: 500px;
+  overflow-y: auto;
+}

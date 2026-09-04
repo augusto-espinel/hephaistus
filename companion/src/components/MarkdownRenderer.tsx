@@ -13,7 +13,8 @@ interface MarkdownRendererProps {
  * Renders markdown content with:
  * - GitHub-flavored markdown (tables, strikethrough, task lists)
  * - LaTeX math ($inline$ and $$block$$)
- * - Syntax-highlighted code blocks
+ * - Collapsible JSON code blocks (click to expand/collapse)
+ * - Collapsible thinking/reasoning blocks
  */
 export function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
   return (
@@ -22,6 +23,32 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
         components={{
+          // Make fenced code blocks collapsible (especially JSON)
+          pre({ children, ...props }) {
+            // Check if the child is a code block with json class
+            const child = Array.isArray(children) ? children[0] : children
+            const isJsonBlock = child?.props?.className?.includes('language-json')
+            const isLongBlock = child?.props?.children && 
+              String(child.props.children).length > 200
+            
+            if (isJsonBlock || isLongBlock) {
+              const langLabel = isJsonBlock ? 'JSON' : 'Code'
+              const charCount = child?.props?.children 
+                ? String(child.props.children).length 
+                : 0
+              return (
+                <details className="collapsible-code-block" open>
+                  <summary>
+                    {isJsonBlock ? '📋' : '💻'} {langLabel} 
+                    {charCount > 0 && ` (${charCount} chars)`}
+                  </summary>
+                  <pre {...props}>{children}</pre>
+                </details>
+              )
+            }
+            
+            return <pre {...props}>{children}</pre>
+          },
           // Style code blocks
           code({ inline, className, children, ...props }: any) {
             return !inline ? (

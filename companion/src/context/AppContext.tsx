@@ -24,6 +24,10 @@ interface LLMResponse {
   patch_plan: any | null
   provider: string
   model: string
+  // Thinking/reasoning blocks extracted from response (DeepSeek-R1, etc.)
+  thinking_content?: string
+  // Display-friendly response with thinking blocks condensed
+  display_response?: string
 }
 
 interface AppState {

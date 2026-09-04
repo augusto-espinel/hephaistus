@@ -139,7 +139,7 @@ class GenerateRequest(BaseModel):
     include_full_simulation: bool = False
     provider: str = "ollama"  # "ollama" or "openrouter"
     model: Optional[str] = None
-    timeout_seconds: Optional[float] = None  # Override default timeout (120s)
+    timeout_seconds: Optional[float] = None  # Override default timeout (180s)
 
 
 class GenerateResponse(BaseModel):
@@ -150,6 +150,10 @@ class GenerateResponse(BaseModel):
     clarification_question: str = ""
     parse_error: Optional[str] = None
     is_valid: bool
+    # Thinking/reasoning blocks extracted from response (DeepSeek-R1, etc.)
+    thinking_content: str = ""
+    # Display-friendly response with thinking blocks condensed
+    display_response: str = ""
 
 
 class ContextAssembleRequest(BaseModel):
@@ -840,9 +844,32 @@ async def generate_patch_plan(request: GenerateRequest):
             clarification_question=proposal.clarification_question,
             parse_error=proposal.parse_error,
             is_valid=proposal.is_valid(),
+            thinking_content=proposal.thinking_content,
+            display_response=proposal.display_response,
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"LLM generation failed: {str(e)}")
+        error_msg = str(e)
+        # Provide actionable error messages for common failures
+        if "empty response" in error_msg.lower():
+            raise HTTPException(
+                status_code=504,
+                detail=f"LLM returned empty response — likely a timeout or provider error. "
+                       f"Try again or increase timeout. Details: {error_msg}"
+            )
+        elif "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
+            raise HTTPException(
+                status_code=504,
+                detail=f"LLM request timed out. Try increasing timeout_seconds or using a faster model. "
+                       f"Details: {error_msg}"
+            )
+        elif "connection error" in error_msg.lower():
+            raise HTTPException(
+                status_code=502,
+                detail=f"Could not reach LLM provider. Check that the service is running. "
+                       f"Details: {error_msg}"
+            )
+        else:
+            raise HTTPException(status_code=500, detail=f"LLM generation failed: {error_msg}")
 
 
 @app.post("/api/context/assemble", response_model=ContextAssembleResponse)

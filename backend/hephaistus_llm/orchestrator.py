@@ -70,7 +70,31 @@ Factors to consider when choosing:
 - Robustness (convergence reliability)
 
 State your recommendation clearly and commit to one plan.
+
+## Output Discipline
+
+**DO NOT output your internal reasoning process.** Start directly with your answer.
+
+- Do NOT write "Let me think..." or "We need to analyze..." or similar preamble
+- Do NOT output your step-by-step analysis as text before the answer
+- Start immediately with either: the patch-plan JSON, or a brief clarifying question
+- Keep any explanatory text SHORT (2-3 sentences max before the JSON)
+
+Your response should be structured as:
+1. Optional: 1-2 sentences of context (only if absolutely necessary)
+2. The patch-plan JSON block (your primary output)
+3. Optional: Brief rationale paragraph after the JSON
+
+DO NOT spend tokens on lengthy preamble. Every token spent on "Let me think" is a token not available for your answer.
 """
+
+
+# Thinking block patterns for models that reason in-band (DeepSeek-R1, etc.)
+# These are compiled at module level for efficiency
+_THINK_TAG_OPEN = "<think>"
+_THINK_TAG_CLOSE = "</think>"
+_THINKING_TAG_OPEN = "<thinking>"
+_THINKING_TAG_CLOSE = "</thinking>"
 
 
 @dataclass
@@ -83,10 +107,51 @@ class PatchPlanProposal:
     is_clarification: bool = False
     clarification_question: str = ""
     parse_error: Optional[str] = None
+    # Thinking/reasoning blocks extracted from response (for models like DeepSeek-R1)
+    thinking_content: str = ""
+    # Display-friendly response (raw_response with thinking blocks condensed)
+    display_response: str = ""
     
     def is_valid(self) -> bool:
         """Check if proposal contains a valid patch-plan."""
         return self.patch_plan is not None and self.parse_error is None
+
+
+def _extract_thinking_blocks(content: str) -> tuple:
+    """
+    Extract thinking/reasoning blocks from LLM response.
+    
+    Supports models that output structured reasoning tags:
+    - DeepSeek-R1: <think>...</think>
+    - Some models: <thinking>...</thinking>
+    
+    Returns:
+        (thinking_content, display_content) tuple where:
+        - thinking_content: extracted reasoning text (empty string if none found)
+        - display_content: content with thinking blocks replaced by collapsible marker
+    """
+    import re
+    
+    thinking_parts = []
+    display_content = content
+    
+    # Pattern 1: <think>...</think> (DeepSeek-R1, some reasoning models)
+    think_pattern = re.escape(_THINK_TAG_OPEN) + r'(.*?)' + re.escape(_THINK_TAG_CLOSE)
+    matches = re.findall(think_pattern, content, re.DOTALL)
+    if matches:
+        thinking_parts.extend(matches)
+        display_content = re.sub(think_pattern, '[reasoning...]', display_content, flags=re.DOTALL)
+    
+    # Pattern 2: <thinking>...</thinking> (some providers)
+    thinking_pattern = re.escape(_THINKING_TAG_OPEN) + r'(.*?)' + re.escape(_THINKING_TAG_CLOSE)
+    matches = re.findall(thinking_pattern, content, re.DOTALL)
+    if matches:
+        thinking_parts.extend(matches)
+        display_content = re.sub(thinking_pattern, '[reasoning...]', display_content, flags=re.DOTALL)
+    
+    thinking_content = '\n'.join(thinking_parts).strip() if thinking_parts else ""
+    
+    return thinking_content, display_content
 
 
 class LLMOrchestrator:
@@ -243,6 +308,9 @@ class LLMOrchestrator:
         """
         Parse LLM response to extract patch-plan or clarification.
         
+        Handles models that output think-tag reasoning blocks
+        (like DeepSeek-R1) by extracting them separately.
+        
         Args:
             content: Raw LLM response content
             
@@ -255,7 +323,24 @@ class LLMOrchestrator:
         # Handle None or empty content (e.g., tool_calls-only responses)
         content = content or ""
         
+        # Guard: empty response after stripping indicates LLM failure
+        if not content.strip():
+            raise RuntimeError(
+                "LLM returned empty response. This usually indicates a timeout, "
+                "rate limit, or server error. Please check your provider status "
+                "and try again. Consider increasing timeout_seconds if using a "
+                "local model."
+            )
+        
         proposal = PatchPlanProposal(raw_response=content)
+        
+        # Extract thinking/reasoning blocks (for models like DeepSeek-R1)
+        thinking_content, display_content = _extract_thinking_blocks(content)
+        proposal.thinking_content = thinking_content
+        proposal.display_response = display_content
+        
+        # Use display_content for further parsing (thinking blocks removed)
+        parse_content = display_content
         
         # Check for clarification
         clarification_markers = [
@@ -265,16 +350,16 @@ class LLMOrchestrator:
             "I need more information",
             "could you provide more details",
         ]
-        content_lower = content.lower()
+        content_lower = parse_content.lower()
         
         if any(marker in content_lower for marker in clarification_markers):
             proposal.is_clarification = True
-            proposal.clarification_question = content.strip()
+            proposal.clarification_question = parse_content.strip()
             return proposal
         
         # Try to extract JSON patch-plan
         json_pattern = r'```json\s*([\s\S]*?)\s*```'
-        matches = re.findall(json_pattern, content)
+        matches = re.findall(json_pattern, parse_content)
         
         for match in matches:
             try:
@@ -291,10 +376,10 @@ class LLMOrchestrator:
         # Try direct JSON
         try:
             # Find JSON object in content
-            json_start = content.find("{")
-            json_end = content.rfind("}") + 1
+            json_start = parse_content.find("{")
+            json_end = parse_content.rfind("}") + 1
             if json_start >= 0 and json_end > json_start:
-                potential_json = content[json_start:json_end]
+                potential_json = parse_content[json_start:json_end]
                 patch_plan = json.loads(potential_json)
                 
                 if patch_plan.get("schema") == "hephaistus/patch-plan/v1":
@@ -309,7 +394,7 @@ class LLMOrchestrator:
         
         # Extract reasoning from response
         reasoning_pattern = r'(?:rationale|reasoning|explanation)[:\s]*([^\n]+(?:\n[^\n]+)*)'
-        reasoning_match = re.search(reasoning_pattern, content, re.IGNORECASE)
+        reasoning_match = re.search(reasoning_pattern, parse_content, re.IGNORECASE)
         if reasoning_match:
             proposal.reasoning = reasoning_match.group(1).strip()
         

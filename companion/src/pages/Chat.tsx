@@ -122,6 +122,8 @@ export function Chat({
         patch_plan: result.patch_plan || null,
         provider: llmSelection.provider,
         model: llmSelection.model,
+        thinking_content: result.thinking_content || '',
+        display_response: result.display_response || '',
       })
       setRequest('') // Clear input after successful submission
       // Refresh history to include new entry
@@ -153,6 +155,8 @@ export function Chat({
             patch_plan: llmResult.patch_plan || null,
             provider: llmSelection.provider,
             model: llmSelection.model,
+            thinking_content: llmResult.thinking_content || '',
+            display_response: llmResult.display_response || '',
           })
           fetchHistory()
         }
@@ -209,9 +213,11 @@ export function Chat({
     ? {
         raw_response: currentEntry.llm_response || '',
         patch_plan: currentEntry.patch_plan_json ? JSON.parse(currentEntry.patch_plan_json) : null,
-        is_history: true,
+        is_history: true as const,
         timestamp: currentEntry.timestamp,
         request: currentEntry.user_request,
+        thinking_content: '',
+        display_response: '',
       }
     : lastResponse
 
@@ -298,8 +304,18 @@ export function Chat({
                   <strong>Request:</strong> {currentEntry.user_request}
                 </div>
               )}
+              {/* Collapsible thinking/reasoning block */}
+              {displayResponse.thinking_content && (
+                <details className="thinking-block">
+                  <summary>🧠 Reasoning ({displayResponse.thinking_content.length} chars)</summary>
+                  <div className="thinking-content">
+                    <MarkdownRenderer content={displayResponse.thinking_content} />
+                  </div>
+                </details>
+              )}
+              {/* Main response content (uses display_response with thinking removed) */}
               <div className="message-content">
-                <MarkdownRenderer content={displayResponse.raw_response} />
+                <MarkdownRenderer content={displayResponse.display_response || displayResponse.raw_response} />
               </div>
               {displayResponse.patch_plan && (
                 <PatchApprovalCard

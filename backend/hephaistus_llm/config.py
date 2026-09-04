@@ -33,7 +33,7 @@ class ProviderConfig:
     top_p: float = 1.0
     
     # Request settings
-    timeout_seconds: float = 120.0
+    timeout_seconds: float = 180.0
     
     # Additional options
     extra_options: Dict[str, Any] = field(default_factory=dict)
@@ -50,7 +50,7 @@ class ProviderConfig:
         model: str = "anthropic/claude-3.5-sonnet",
         api_key: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: int = 4096,
+        max_tokens: int = 16384,
         timeout_seconds: Optional[float] = None,
         **kwargs
     ) -> "ProviderConfig":
@@ -61,7 +61,7 @@ class ProviderConfig:
             api_key=api_key or os.environ.get("OPENROUTER_API_KEY"),
             temperature=temperature,
             max_tokens=max_tokens,
-            timeout_seconds=timeout_seconds if timeout_seconds is not None else 120.0,
+            timeout_seconds=timeout_seconds if timeout_seconds is not None else 180.0,
             extra_options=kwargs,
         )
     
@@ -82,7 +82,7 @@ class ProviderConfig:
             base_url=base_url,
             temperature=temperature,
             max_tokens=max_tokens,
-            timeout_seconds=timeout_seconds if timeout_seconds is not None else 120.0,
+            timeout_seconds=timeout_seconds if timeout_seconds is not None else 180.0,
             extra_options=kwargs,
         )
     
@@ -117,7 +117,7 @@ class ProviderConfig:
             temperature=data.get("temperature", 0.7),
             max_tokens=data.get("max_tokens", 4096),
             top_p=data.get("top_p", 1.0),
-            timeout_seconds=data.get("timeout_seconds", 120.0),
+            timeout_seconds=data.get("timeout_seconds", 180.0),
             extra_options=data.get("extra_options", {}),
         )
     

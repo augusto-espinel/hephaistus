@@ -1,7 +1,7 @@
 # HephAIstus Architecture
 
-Version: 2.2
-Date: 2026-08-24
+Version: 2.3
+Date: 2026-09-04
 Status: Phase 4 complete
 
 ## Architectural summary
@@ -75,6 +75,12 @@ Derived state should include:
 This is a runtime projection. It is not a required persisted `state.json` artifact.
 
 **Implementation note:** The parser now correctly accumulates net coverage across same-name labels, enabling multiple disjoint stub islands per net name. This was a critical fix for stub-based restructuring.
+
+**Coordinate system fix (2026-09-04):** KiCad library symbols use Y-UP (Cartesian) coordinates while schematics use Y-DOWN (screen) coordinates. The parser now negates the Y coordinate when transforming from library to schematic space: `schematic_y = symbol_y - library_y`. This was the root cause of incorrect pin-to-net assignments for IGBTs and other rotated components.
+
+**KiCad-compatible net naming (2026-09-04):** Unnamed nets now use KiCad's `Net-(Ref-PadName)` convention instead of synthetic `N$1`/`N$2` names. This ensures parser output aligns with simulation logs and netlist exports, enabling the LLM to cross-reference results. Pin names are extracted from library symbol definitions (e.g., `C`, `G`, `E` for IGBTs).
+
+**No net merge through components:** KiCad's netlist model is wire-only. If two pins are on separate wire islands, they remain separate nets even if a component bridges them. The parser faithfully reproduces this behavior.
 
 ### 1.3 Patch backend
 

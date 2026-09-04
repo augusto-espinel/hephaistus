@@ -873,6 +873,13 @@ def create_symbol_instance(lib_symbol_block: str,
     - Sim.Name: Subcircuit/model name
     - Sim.Pins: Pin-to-SPICE node mapping
     - Sim.Params: Optional parameters
+    
+    B-Source Handling:
+    For behavioral sources (B-sources), the 'value' parameter contains the model formula
+    (I=... or V=...). These must be routed to Sim.Params, not Value property:
+    - Sim.Device: "B" (behavioral source)
+    - Sim.Params: type="B" model="I=..." or type="B" model="V=..."
+    - Value: Reference designator (e.g., "B1")
     """
     # The library symbol looks like:
     # (symbol "Device:C" (property "Reference" "C") ...)
@@ -891,6 +898,14 @@ def create_symbol_instance(lib_symbol_block: str,
     # For KiCad 10, symbol instances have a different structure
     # They reference the library symbol and have instance-specific properties
     
+    # Detect B-source (behavioral source) - formula goes to Sim.Params, not Value
+    # B-sources have lib_id like "Simulation_SPICE:BSOURCE" or "pspice:BSOURCE"
+    is_bsource = (
+        ':BSOURCE' in lib_id.upper() or
+        reference.upper().startswith('B') and reference[1:].isdigit() or
+        'BSOURCE' in lib_id.upper()
+    )
+    
     # Extract SPICE properties from library symbol block
     # These must be copied to instance for simulation symbols
     spice_props = {}
@@ -900,6 +915,19 @@ def create_symbol_instance(lib_symbol_block: str,
         match = re.search(pattern, lib_symbol_block)
         if match:
             spice_props[prop_name] = match.group(1)
+    
+    # For B-sources: override Sim.Device and Sim.Params from the value parameter
+    # The 'value' param contains the formula (I=... or V=...)
+    if is_bsource:
+        # Ensure formula has I= or V= prefix
+        model_value = value if value.startswith(('I=', 'V=')) else f'I={value}'
+        # Format: type="B" model="I=..." (with escaped quotes for KiCad)
+        spice_props['Sim.Device'] = 'B'
+        spice_props['Sim.Params'] = f'type="B" model="{model_value}"'
+        # Use reference as display value (e.g., "B1")
+        display_value = reference
+    else:
+        display_value = value
     
     # Build the symbol instance
     # KiCad 10 format:
@@ -928,7 +956,7 @@ def create_symbol_instance(lib_symbol_block: str,
 			)
 		)''')
     
-    property_blocks.append(f'''		(property "Value" "{value}"
+    property_blocks.append(f'''		(property "Value" "{display_value}"
 			(at {position[0]:.2f} {position[1] - 1.27:.2f} 0)
 			(show_name no)
 			(do_not_autoplace no)

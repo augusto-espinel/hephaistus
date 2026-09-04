@@ -1,7 +1,7 @@
 # HephAIstus Product Specification
 
-Version: 2.1
-Date: 2026-08-20
+Version: 2.2
+Date: 2026-09-04
 Status: Implementation progress
 
 ## 1. Scope
@@ -199,6 +199,8 @@ Preferred near-term interfaces:
 
 - **KiCad ingestion (2026-07-18):** Extension activation, file watcher, Python/KiUtils path resolution, KiCad 10 parsing, JSON state generation.
 - **Stub-based net restructuring (2026-08-04):** Full apply flow with 26/26 tests passing. Operations include: no-op, series insertion, chained splits, parallel additions, component embedding (Device:L), and duplicate-UUID abort. kicad-cli ERC validates zero new violations vs fixture baseline.
+- **Y-coordinate fix (2026-09-04):** Pin position calculation corrected for KiCad's coordinate system (library Y-UP → schematic Y-DOWN). Critical for rotated components like IGBTs.
+- **KiCad-compatible net naming (2026-09-04):** Unnamed nets now use `Net-(Ref-PadName)` convention, matching KiCad's netlist export format for simulation log cross-referencing.
 - **Session persistence (2026-08-21):** Project-scoped sessions in `.hephaistus/` directory. Auto-discovery of project root. Session state survives server restarts. Shared context service for LLM requests.
 
 ### In progress
