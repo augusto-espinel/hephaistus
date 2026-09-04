@@ -1092,6 +1092,8 @@ def extract_pin_definitions(lib_symbol_block: str) -> Dict[str, Tuple[float, flo
     """Extract pin number -> (rel_x, rel_y, angle_deg) from a library symbol block.
 
     KiCad pin angle points from the connect point INTO the symbol body.
+    Coordinates are in library Y-UP space and MUST be negated on Y
+    before use in schematic (Y-DOWN) space.
     """
     pin_defs: Dict[str, Tuple[float, float, float]] = {}
     for m in re.finditer(r'\(pin\s', lib_symbol_block):
@@ -1284,6 +1286,8 @@ def _pin_geometry_from_content(content: str, comp_uuid: str,
     if pin_num not in pin_defs:
         return None
     rel_x, rel_y, pin_angle = pin_defs[pin_num]
+    # Negate Y: library coords are Y-UP, schematic coords are Y-DOWN
+    rel_y = -rel_y
     rx, ry = _rotate(rel_x, rel_y, rot)
     return ((sx + rx, sy + ry), _stub_direction_from_lib_angle(pin_angle, rot))
 
