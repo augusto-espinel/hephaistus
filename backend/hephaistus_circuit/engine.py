@@ -216,7 +216,8 @@ def _add_component(state: MutableMapping[str, Any], operation: Mapping[str, Any]
         {
             "uuid": component_uuid,
             "reference": reference,
-            "libId": lib_id,
+            "lib_id": lib_id,  # snake_case to match parser output
+            "libId": lib_id,   # camelCase for backward compatibility
             "value": value,
             "properties": {"Value": value},
             "pins": pin_entries,

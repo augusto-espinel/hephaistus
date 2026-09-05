@@ -180,15 +180,16 @@ export function Chat({
   const handleLoadSchematic = async (path: string) => {
     await loadSchematic(path)
     // Schematic loaded successfully - caller will close dialog
-    // Now do cleanup/refresh in the background
+    // Clear state immediately
     setLastResponse(null)
     setHistoryIndex(-1)
-    // Small delay to let dialog close animation start
+    // Delay refresh to allow dialog close animation to complete
+    // 300ms is enough for CSS transitions
     setTimeout(() => {
       refreshSession()
       fetchHistory()
-    }, 50)
-    emit(Events.SCHEMATIC_LOADED)
+      emit(Events.SCHEMATIC_LOADED)
+    }, 300)
   }
 
   const handleReloadSchematic = async () => {

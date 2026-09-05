@@ -4,6 +4,19 @@ HephAIstus is an AI copilot for KiCad schematic design and circuit simulation.
 
 It sits beside KiCad, understands schematic and simulation context, answers engineering questions, and applies previewable, validated changes without requiring the user to copy files, screenshots, or console output into an external chat.
 
+## What's New (2026-09-05)
+
+### B-Source & SPICE Simulation Fixes
+
+- **Sim.Device fix:** Behavioral sources (B-sources) now correctly use `Sim.Device = "SPICE"` instead of `"B"`, ensuring proper SPICE netlist generation
+- **Sim.Params visibility:** Fixed property visibility — `Sim.Params` must be visible in schematic (no `(hide yes)`) for correct SPICE export
+- **Library inclusion:** Added support for `.include` directives to include SPICE subcircuit libraries
+
+### Companion UI Improvements
+
+- **Dialog close fix:** Fixed race condition where Load Schematic dialog wouldn't close properly when triggered from header button
+- **Better UX:** Removed native `prompt()` dialogs in favor of React-managed state; improved form styling and keyboard navigation
+
 ## Documentation Guide
 
 ### Start Here
@@ -48,7 +61,7 @@ The target workflow is:
 
 ## Implementation Status
 
-### Completed
+### Completed ✅
 
 | Component | Description |
 |-----------|-------------|
@@ -56,10 +69,17 @@ The target workflow is:
 | Patch operations | 7 operation types with validation |
 | Stub-based restructuring | Series insertions, net reassignments |
 | SPICE property inheritance | Auto-copy `Sim.*` properties from libraries |
+| B-Source generation | Behavioral sources with correct `Sim.Device = "SPICE"` |
 | Simulation output parsing | Ngspice console, DC op, raw waveforms |
 | Session persistence | Project-scoped sessions in `.hephaistus/` |
 | LLM context assembly | Token-budgeted layered context |
 | Companion UI | React-based chat, context inspector, history |
+| Dialog management | Proper React state management for dialogs |
+
+### Known Issues
+
+- KiCad/ngspice plugin loading errors (`ivlng.so`, `ivlng.vpi`) may appear in console — these are environmental warnings that may not affect simulation
+- SPICE library files (`.lib`) must be manually included via `.include` directive in schematic for custom subcircuits
 
 ### In Progress
 
@@ -70,20 +90,13 @@ The target workflow is:
 
 ```bash
 # Clone and setup
-git clone https://github.com/your-org/hephaistus.git
-cd hephaistus
-python -m venv .venv
-source .venv/bin/activate
 pip install -e .
 
-# Run tests
-python -m pytest tests/ -v
+# Run backend
+python -m hephaistus
 
-# Parse a schematic
-python -m hephaistus_circuit.cli parse fixtures/schematics/rectifier.kicad_sch
-
-# Apply a patch plan (dry-run)
-python -m hephaistus_circuit.cli apply-plan fixtures/schematics/rectifier.kicad_sch examples/patches/insert_shunt.json --dry-run
+# Run companion UI (separate terminal)
+cd companion && npm install && npm run dev
 ```
 
 ## Branch Information

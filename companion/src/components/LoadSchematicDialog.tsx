@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 interface LoadSchematicDialogProps {
   isOpen: boolean
@@ -17,10 +17,51 @@ export function LoadSchematicDialog({
 }: LoadSchematicDialogProps) {
   const [path, setPath] = useState('')
   const [localError, setLocalError] = useState<string | null>(null)
+  const [visible, setVisible] = useState(false)
+  const closingRef = useRef(false)
+  const inputRef = useRef<HTMLInputElement>(null)
 
-  if (!isOpen) return null
+  // Sync visible state with isOpen prop
+  useEffect(() => {
+    if (isOpen && !closingRef.current) {
+      setVisible(true)
+    }
+  }, [isOpen])
 
-  const handleSubmit = async () => {
+  // Focus input when dialog opens
+  useEffect(() => {
+    if (visible && inputRef.current) {
+      inputRef.current.focus()
+    }
+  }, [visible])
+
+  // Handle close with proper state cleanup
+  const handleClose = () => {
+    closingRef.current = true
+    setVisible(false)
+    // Call parent's onClose after animation starts
+    setTimeout(() => {
+      onClose()
+      closingRef.current = false
+    }, 50)
+  }
+
+  // Reset form state when dialog closes
+  useEffect(() => {
+    if (!visible) {
+      const timer = setTimeout(() => {
+        setPath('')
+        setLocalError(null)
+      }, 100)
+      return () => clearTimeout(timer)
+    }
+  }, [visible])
+
+  if (!visible) return null
+
+  const handleSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault()
+    
     setLocalError(null)
 
     if (!path.trim()) {
@@ -35,83 +76,91 @@ export function LoadSchematicDialog({
 
     try {
       await onLoad(path.trim())
-      // Close dialog immediately after successful load
-      // Parent will handle cleanup (clear history, etc.)
-      setPath('')
-      onClose()
+      // Close dialog after successful load
+      handleClose()
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Failed to load schematic')
     }
   }
 
-  const handleFileSelect = () => {
-    // Note: In Tauri, we'd use the native file picker
-    // For now, user manually enters the path
-    const selected = prompt('Enter path to .kicad_sch file:')
-    if (selected) {
-      setPath(selected)
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !loading && path.trim()) {
+      handleSubmit()
+    }
+    if (e.key === 'Escape') {
+      handleClose()
+    }
+  }
+
+  const handleOverlayClick = (e: React.MouseEvent) => {
+    // Only close if clicking the overlay, not the dialog content
+    if (e.target === e.currentTarget) {
+      handleClose()
     }
   }
 
   return (
-    <div className="dialog-overlay">
-      <div className="dialog load-schematic-dialog">
+    <div className="dialog-overlay" onClick={handleOverlayClick}>
+      <div 
+        className="dialog load-schematic-dialog" 
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={handleKeyDown}
+      >
         <div className="dialog-header">
           <h3>Load Schematic</h3>
-          <button className="close-button" onClick={onClose}>×</button>
+          <button className="close-button" onClick={handleClose}>×</button>
         </div>
 
-        <div className="dialog-body">
-          <p className="dialog-description">
-            Load a KiCad schematic file. The schematic must be saved in KiCad first.
-          </p>
+        <form onSubmit={handleSubmit}>
+          <div className="dialog-body">
+            <p className="dialog-description">
+              Load a KiCad schematic file. The schematic must be saved in KiCad first.
+            </p>
 
-          <div className="form-section">
-            <label>
-              <span className="label-text">Schematic File Path</span>
-              <span className="label-hint">(.kicad_sch file)</span>
-            </label>
-            <div className="input-with-button">
+            <div className="form-section">
+              <label>
+                <span className="label-text">Schematic File Path</span>
+                <span className="label-hint">(.kicad_sch file)</span>
+              </label>
               <input
+                ref={inputRef}
                 type="text"
                 value={path}
                 onChange={(e) => setPath(e.target.value)}
                 placeholder="/path/to/project/schematic.kicad_sch"
                 disabled={loading}
+                onKeyDown={handleKeyDown}
               />
-              <button
-                type="button"
-                onClick={handleFileSelect}
-                disabled={loading}
-              >
-                Browse...
-              </button>
+              <p className="input-hint">
+                Tip: Copy the file path from KiCad's title bar or Finder
+              </p>
             </div>
+
+            {(error || localError) && (
+              <div className="error-message">
+                {error || localError}
+              </div>
+            )}
           </div>
 
-          {(error || localError) && (
-            <div className="error-message">
-              {error || localError}
-            </div>
-          )}
-        </div>
-
-        <div className="dialog-footer">
-          <button
-            className="cancel-button"
-            onClick={onClose}
-            disabled={loading}
-          >
-            Cancel
-          </button>
-          <button
-            className="submit-button"
-            onClick={handleSubmit}
-            disabled={loading || !path.trim()}
-          >
-            {loading ? 'Loading...' : 'Load'}
-          </button>
-        </div>
+          <div className="dialog-footer">
+            <button
+              type="button"
+              className="cancel-button"
+              onClick={handleClose}
+              disabled={loading}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="submit-button"
+              disabled={loading || !path.trim()}
+            >
+              {loading ? 'Loading...' : 'Load'}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   )

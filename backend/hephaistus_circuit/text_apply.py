@@ -345,8 +345,15 @@ def apply_value_changes_text(content: str, value_changes: List[Dict[str, Any]]) 
         if is_bsource:
             # For B-sources, update Sim.Params with model formula
             # Format: type="B" model="I=..." or type="B" model="V=..."
-            # The new_value should already include I= or V= prefix
-            model_value = new_value if new_value.startswith(('I=', 'V=')) else f'I={new_value}'
+            # Normalize: strip whitespace and handle I=/V= with optional space
+            new_value_stripped = new_value.strip()
+            match = re.match(r'([IV])\\s*=\\s*(.+)', new_value_stripped, re.IGNORECASE)
+            if match:
+                prefix = match.group(1).upper()
+                formula = match.group(2).strip()
+                model_value = f'{prefix}={formula}'
+            else:
+                model_value = f'I={new_value_stripped}'
             # KiCad requires quotes inside the string to be escaped
             # So type="B" model="I=..." becomes "type=\"B\" model=\"I=...\""
             sim_params_value = f'type=\"B\" model=\"{model_value}\"'
@@ -847,6 +854,37 @@ def generate_uuid() -> str:
     return str(uuid.uuid4())
 
 
+def extract_project_path(content: str) -> str:
+    """Extract the project path from an existing symbol's instances block.
+    
+    KiCad 6+ requires an (instances) block with project path for symbol instances.
+    We extract this from existing symbols in the schematic.
+    """
+    # Pattern: (path "/<uuid>" ...)
+    match = re.search(r'\(path\s+"(/[^"]+)"', content)
+    if match:
+        return match.group(1)
+    # Default path if none found
+    return "/00000000-0000-0000-0000-000000000000"
+
+
+def extract_project_name(content: str) -> str:
+    """Extract the project name from an existing symbol's instances block.
+    
+    KiCad 6+ requires an (instances) block with project name.
+    We extract this from existing symbols in the schematic.
+    """
+    # Pattern: (project "<name>" ...)
+    match = re.search(r'\(project\s+"([^"]+)"', content)
+    if match:
+        return match.group(1)
+    # Fallback: try to extract from schematic file comments
+    match = re.search(r'\(project\s+"([^"]+)"', content)
+    if match:
+        return match.group(1)
+    return "project"
+
+
 def create_symbol_instance(lib_symbol_block: str, 
                            new_uuid: str,
                            reference: str,
@@ -877,7 +915,7 @@ def create_symbol_instance(lib_symbol_block: str,
     B-Source Handling:
     For behavioral sources (B-sources), the 'value' parameter contains the model formula
     (I=... or V=...). These must be routed to Sim.Params, not Value property:
-    - Sim.Device: "B" (behavioral source)
+    - Sim.Device: "SPICE" (raw SPICE model, with type="B" in Sim.Params)
     - Sim.Params: type="B" model="I=..." or type="B" model="V=..."
     - Value: Reference designator (e.g., "B1")
     """
@@ -919,13 +957,24 @@ def create_symbol_instance(lib_symbol_block: str,
     # For B-sources: override Sim.Device and Sim.Params from the value parameter
     # The 'value' param contains the formula (I=... or V=...)
     if is_bsource:
-        # Ensure formula has I= or V= prefix
-        model_value = value if value.startswith(('I=', 'V=')) else f'I={value}'
+        # Normalize: strip whitespace and handle I=/V= with optional space
+        value_stripped = value.strip()
+        match = re.match(r'([IV])\s*=\s*(.+)', value_stripped, re.IGNORECASE)
+        if match:
+            # Use the normalized form: I=<formula> or V=<formula>
+            prefix = match.group(1).upper()
+            formula = match.group(2).strip()
+            model_value = f'{prefix}={formula}'
+        else:
+            # No I=/V= prefix, default to I=
+            model_value = f'I={value_stripped}'
         # Format: type="B" model="I=..." (with escaped quotes for KiCad)
-        spice_props['Sim.Device'] = 'B'
+        # Sim.Device must be "SPICE" for KiCad to generate raw SPICE netlist
+        # The type="B" inside Sim.Params tells it to use a behavioral source
+        spice_props['Sim.Device'] = 'SPICE'
         spice_props['Sim.Params'] = f'type="B" model="{model_value}"'
-        # Use reference as display value (e.g., "B1")
-        display_value = reference
+        # B-source Value property should be "BSOURCE" (formula goes into Sim.Params)
+        display_value = 'BSOURCE'
     else:
         display_value = value
     
@@ -944,93 +993,110 @@ def create_symbol_instance(lib_symbol_block: str,
     
     # KiCad 10 symbol instance format:
     # Build base instance with required properties
+    # Note: Properties use 1 tab (\t) because insertion adds another tab
+    # Final structure in schematic: 2 tabs for properties, 3 for nested content
     property_blocks = []
-    property_blocks.append(f'''		(property "Reference" "{reference}"
-			(at {position[0]:.2f} {position[1] + 1.27:.2f} 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
+    property_blocks.append(f'''	(property "Reference" "{reference}"
+		(at {position[0]:.2f} {position[1] + 1.27:.2f} 0)
+		(show_name no)
+		(do_not_autoplace no)
+		(effects
+			(font
+				(size 1.27 1.27)
 			)
-		)''')
+		)
+	)''')
     
-    property_blocks.append(f'''		(property "Value" "{display_value}"
-			(at {position[0]:.2f} {position[1] - 1.27:.2f} 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
+    property_blocks.append(f'''	(property "Value" "{display_value}"
+		(at {position[0]:.2f} {position[1] - 1.27:.2f} 0)
+		(show_name no)
+		(do_not_autoplace no)
+		(effects
+			(font
+				(size 1.27 1.27)
 			)
-		)''')
+		)
+	)''')
     
-    property_blocks.append(f'''		(property "Footprint" ""
-			(at {position[0]:.2f} {position[1]:.2f} 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(hide yes)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
+    property_blocks.append(f'''	(property "Footprint" ""
+		(at {position[0]:.2f} {position[1]:.2f} 0)
+		(show_name no)
+		(do_not_autoplace no)
+		(hide yes)
+		(effects
+			(font
+				(size 1.27 1.27)
 			)
-		)''')
+		)
+	)''')
     
-    property_blocks.append(f'''		(property "Datasheet" ""
-			(at {position[0]:.2f} {position[1]:.2f} 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(hide yes)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
+    property_blocks.append(f'''	(property "Datasheet" ""
+		(at {position[0]:.2f} {position[1]:.2f} 0)
+		(show_name no)
+		(do_not_autoplace no)
+		(hide yes)
+		(effects
+			(font
+				(size 1.27 1.27)
 			)
-		)''')
+		)
+	)''')
     
     # Add SPICE properties if present in library symbol
     # These are CRITICAL for simulation - without them, subcircuits won't be found
     for prop_name in ['Sim.Device', 'Sim.Type', 'Sim.Params', 'Sim.Pins', 'Sim.Library', 'Sim.Name']:
         if prop_name in spice_props:
-            property_blocks.append(f'''		(property "{prop_name}" "{spice_props[prop_name]}"
-			(at {position[0]:.2f} {position[1]:.2f} 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(hide yes)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)''')
-    
-    # Build complete instance
-    properties_text = '\n'.join(property_blocks)
-    instance = f'''(symbol
-		(lib_id "{lib_id}")
+            # Escape quotes in the value for KiCad format
+            escaped_value = spice_props[prop_name].replace('"', '\\"')
+            # Sim.Params is visible in schematic; other SPICE properties are hidden
+            hide_attr = '\n\t\t(hide yes)' if prop_name != 'Sim.Params' else ''
+            property_blocks.append(f'''	(property "{prop_name}" "{escaped_value}"
 		(at {position[0]:.2f} {position[1]:.2f} 0)
-		(uuid "{new_uuid}")
-{properties_text}
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-	)'''
+		(show_name no)
+		(do_not_autoplace no)
+		{hide_attr}
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)''')
+    
+    # Build complete instance - KiCad 10 format
+    # Order: lib_id, at, unit, body_style, exclude_from_sim, in_bom, on_board, in_pos_files,
+    #        dnp, fields_autoplaced, uuid, properties, pins
+    # Note: (instances) block is added by the caller from an existing symbol
+    properties_text = '\n'.join(property_blocks)
     
     # Emit (pin "N" (uuid ...)) blocks — required by the KiCad 6+ instance
     # format; our parser populates symbol.pins from these.
     pin_nums = sorted(extract_pin_definitions(lib_symbol_block).keys(),
                       key=lambda s: (not s.isdigit(), int(s) if s.isdigit() else s))
+    pin_blocks = ''
     if pin_nums:
-        pin_blocks = ''.join(
-            f'\n\t\t(pin "{n}"\n\t\t\t(uuid "{generate_uuid()}")\n\t\t)'
+        pin_blocks = '\n'.join(
+            f'\t(pin "{n}"\n\t\t(uuid "{generate_uuid()}")\n\t)'
             for n in pin_nums
         )
-        tail = instance.rfind('\n')
-        instance = instance[:tail] + pin_blocks + instance[tail:]
+    
+    # Note: Content uses 1 tab (\t) because the insertion code adds another tab
+    # Top-level symbols in schematic have content at 2 tabs total
+    # The closing paren for (symbol should be at 0 tabs (becomes 1 tab after insertion)
+    instance = f'''(symbol
+\t(lib_id "{lib_id}")
+\t(at {position[0]:.2f} {position[1]:.2f} 0)
+\t(unit 1)
+\t(body_style 1)
+\t(exclude_from_sim no)
+\t(in_bom yes)
+\t(on_board yes)
+\t(in_pos_files yes)
+\t(dnp no)
+\t(fields_autoplaced yes)
+\t(uuid "{new_uuid}")
+{properties_text}
+{pin_blocks}
+)'''
 
     return instance
 
@@ -1063,7 +1129,7 @@ def create_net_label(net_name: str, position: Tuple[float, float],
 	(effects
 		(font
 			(size 1.27 1.27)
-		)
+	)
 		(justify {justify})
 	)
 	(uuid "{uuid_str}")
@@ -1130,10 +1196,12 @@ def _stub_direction_from_lib_angle(pin_angle_deg: float, symbol_rot: float = 0.0
     """Unit vector pointing AWAY from the symbol body (stub direction).
 
     KiCad pin angle points from the connect point INTO the body, in KiCad's
-    y-down coordinates (0 = +x, 90 = +y). The stub extends the opposite way.
+    y-down coordinates (0 = +x, 90 = +y down). The stub extends the opposite way.
+    IMPORTANT: KiCad uses Y-down, so we DON'T negate dy (sin values already
+    match Y-down: 90° → +Y down, 270° → -Y up).
     """
     rad = math.radians(pin_angle_deg)
-    dx, dy = -math.cos(rad), -math.sin(rad)
+    dx, dy = -math.cos(rad), math.sin(rad)  # dy NOT negated for Y-down coords
     if symbol_rot:
         dx, dy = _rotate(dx, dy, symbol_rot)
     if abs(dx) < 1e-9:
@@ -1828,8 +1896,16 @@ def apply_component_addition_text(content: str, added_components: List[Dict[str,
         if last_symbol_block:
             im = re.search(r'\(instances', last_symbol_block)
             if im:
+                # Find the start of the line containing (instances
+                # This includes the leading tabs/whitespace
+                line_start = last_symbol_block.rfind('\n', 0, im.start())
+                if line_start == -1:
+                    line_start = 0
+                else:
+                    line_start += 1  # Move past the newline
+                
                 depth = 0
-                iend = im.start()
+                iend = line_start
                 for i in range(im.start(), len(last_symbol_block)):
                     if last_symbol_block[i] == '(':
                         depth += 1
@@ -1838,12 +1914,26 @@ def apply_component_addition_text(content: str, added_components: List[Dict[str,
                         if depth == 0:
                             iend = i + 1
                             break
-                inst_block = last_symbol_block[im.start():iend]
+                
+                inst_block = last_symbol_block[line_start:iend]
                 inst_block = re.sub(r'\(reference\s+"[^"]*"\)',
                                     f'(reference "{reference}")', inst_block, count=1)
-                tail = instance.rfind('\n')
-                instance = (instance[:tail] + '\n\t\t'
-                            + inst_block.replace('\n', '\n\t') + instance[tail:])
+                # The instance now ends with just ')' at 0 indent (becomes 1 tab after insertion)
+                # We need to insert the instances block before the final ')'
+                # The instance template is: ...(pin blocks)\n)
+                # So the final ')' is at the very end
+                #
+                # Original instances block is already properly indented relative to its parent symbol
+                # We need to preserve that relative indentation
+                # Find the minimum indentation in the block and strip it
+                inst_lines = inst_block.split('\n')
+                min_indent = min(len(line) - len(line.lstrip('\t')) for line in inst_lines if line.strip())
+                inst_lines_stripped = [line[min_indent:] if line.strip() else line for line in inst_lines]
+                # Add 1 tab (will become 2 after insertion adds its tab, matching the properties level)
+                inst_block_indented = '\n'.join('\t' + line if line.strip() else line for line in inst_lines_stripped)
+                # Insert before the final ')' - find the last newline position
+                final_paren_pos = instance.rfind(')')
+                instance = instance[:final_paren_pos] + '\n' + inst_block_indented + '\n' + instance[final_paren_pos:]
 
         # Insert after the last symbol instance
         insert_pos = last_symbol_end

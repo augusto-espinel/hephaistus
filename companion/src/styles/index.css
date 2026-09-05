@@ -1195,6 +1195,34 @@ button.modify {
   border-color: var(--accent);
 }
 
+.form-section .input-hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+  font-style: italic;
+}
+
+.form-section input[type="text"] {
+  width: 100%;
+  padding: 0.75rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+}
+
+.form-section input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.form-section input[type="text"]:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .error-message {
   padding: 0.75rem;
   background: rgba(244, 67, 54, 0.1);
