@@ -1,99 +1,90 @@
 # HephAIstus Context
 
-Last updated: 2026-08-22
+Last updated: 2026-09-05
 
-## Project
+## For Agents: Start Here
 
-HephAIstus is being rebuilt as an AI-assisted KiCad schematic and simulation copilot.
+This is your entry point. Read this first, then follow the document map below based on your task.
 
-The new product target is a companion window beside KiCad. It reads schematic files, simulation results, validation reports, and console output directly; answers questions in context; and applies previewable, validated changes.
+## Project Summary
 
-This avoids the current copy/paste workflow where schematics, screenshots, raw outputs, and logs are manually moved into an external chat.
+HephAIstus is an AI copilot for KiCad schematic design and circuit simulation. It:
 
-## Repository reset
+- Parses `.kicad_sch` files into structured JSON state
+- Answers questions about circuits, simulations, and ERC reports
+- Proposes previewable, validated patch plans
+- Applies changes only after user confirmation
 
-On 2026-08-19, the VS Code extension prototype was archived and the product reset was started.
+**Core principle:** Schematic is the source of truth. LLM proposes; deterministic backend disposes.
 
-- Archive branch: `archive/vscode-prototype`
-- Archive tag: `vscode-prototype-2026-08-19`
-- Reset branch: `feature/companion-reset`
-- Suggested local legacy worktree: `../hephaistus-legacy`
+## Architecture Overview
 
-The old implementation remains available for reference but is not part of the new build surface.
+```
+KiCad schematic (.kicad_sch)
+    ↓ parser
+JSON state (components, nets, pins)
+    ↓ context service
+LLM (receives context, produces patch-plan)
+    ↓ validation
+Patch backend (text-level apply)
+    ↓ round-trip validation
+KiCad schematic (modified)
+```
 
-## Current architectural stance
+## Key Files
 
-- **Schematic is the source of truth.** The circuit graph/state is derived from KiCad files at runtime.
-- **Backend is deterministic.** LLM output must be validated and converted into explicit patch operations.
-- **UI is a companion application.** A docked KiCad panel is a future option once schematic IPC support matures.
-- **Use KiCad-native tools.** Prefer `kicad-cli` for ERC/netlist export and native file parsers for `.kicad_sch` mutation.
-- **Simulation output is first-class context.** HephAIstus should own simulation runs and capture raw waveforms, stdout/stderr, and convergence diagnostics.
+| File | Purpose |
+|------|---------|
+| `backend/hephaistus_circuit/parser.py` | KiCad schematic → JSON state |
+| `backend/hephaistus_circuit/engine.py` | Patch-plan validation & application |
+| `backend/hephaistus_circuit/text_apply.py` | Text-level schematic mutations |
+| `backend/hephaistus_context/context_service.py` | LLM context assembly |
+| `backend/hephaistus_llm/orchestrator.py` | LLM orchestration |
 
-## Implementation progress
+## Document Map
 
-### Completed
+**Read in order for your task:**
 
-1. **KiCad ingestion (2026-07-18):** Extension activation, file watcher, Python/KiUtils path resolution, KiCad 10 parsing, JSON state generation. Tested with `rectifier.kicad_sch` (9 components, 5 nets).
+| Task | Documents |
+|------|-----------|
+| **Understanding the project** | `docs/vision.md` → `docs/spec.md` |
+| **Modifying the circuit engine** | `docs/ARCHITECTURE.md` §1-3 → `backend/hephaistus_circuit/IMPLEMENTATION.md` |
+| **Working with LLM context** | `docs/ARCHITECTURE.md` §4 → `docs/LLM_CONTEXT.md` |
+| **Understanding patch operations** | `docs/patch-plan-v1.md` → `backend/hephaistus_circuit/engine.py` |
+| **Adding new operations** | `docs/patch-plan-v1.md` → `backend/hephaistus_circuit/text_apply.py` |
+| **UI/Companion work** | `docs/ARCHITECTURE.md` §3 |
+| **Testing** | `docs/TEST-MANUAL.md` |
 
-2. **Stub-based net restructuring (2026-08-04, commit `30414da`):**
-   - Series insertions expressed as pin net re-assignments in JSON state
-   - Net cleanup: ALL wires/junctions/labels stripped when net loses member pins (kiutils island BFS)
-   - Stub attachment: every former member pin gets stub with new net name
-   - Power symbol anchoring: moves rejected with warning
-   - Library embedding: auto-embed from sym-lib-table resolution
-   - Instance format fix: new components emit proper `(pin N (uuid ...))` and `(instances ...)` blocks
-   - Net coverage fix: multiple disjoint stub islands per net name supported
-   - **Test status:** 26/26 tests passing
-   - **Validation:** kicad-cli ERC confirms zero new violations vs fixture baseline
+## Current Status
 
-3. **Session persistence (2026-08-21):**
-   - Project-scoped sessions in `<project>/.hephaistus/`
-   - Auto-discovery of project root from schematic path
-   - Shared ContextService between API and LLM orchestrator
-   - Session survives server restarts
-   - API endpoints: `/api/session/status`, `/api/session/restore`
+| Component | Status |
+|-----------|--------|
+| KiCad parsing | ✅ Complete |
+| Patch operations (7 types) | ✅ Complete |
+| Stub-based net restructuring | ✅ Complete |
+| SPICE property inheritance | ✅ Complete |
+| Simulation output parsing | ✅ Complete |
+| Session persistence | ✅ Complete |
+| LLM context assembly | ✅ Complete |
+| Companion UI | ✅ Complete |
+| LLM orchestration | ✅ Complete |
 
-4. **Simulation ingestion pipeline (2026-08-22):**
-   - CSV file parsing with waveform statistics
-   - Console output parsing (ngspice format)
-   - Analysis type detection (tran, ac, dc, op)
-   - FIFO archive (keeps last 5 runs)
-   - Staleness detection via schematic hash comparison
-   - API endpoints: `/api/simulation/import`, `/api/simulation/state`
+## Branch Information
 
-5. **SPICE library context (2026-08-22):**
-   - Extract `Sim.Library` properties from components
-   - Load complete .lib files (comments stripped)
-   - Expose subcircuits and models to LLM context
-   - Enable topology reasoning (antiparallel diode detection verified)
+- Active branch: `feature/companion-reset`
+- Archive: `archive/vscode-prototype` (tag: `vscode-prototype-2026-08-19`)
 
-6. **LLM orchestration (2026-08-21):**
-   - Unified provider interface (Ollama, OpenRouter)
-   - Patch-plan JSON extraction from responses
-   - Context assembly with token budget
-   - History persistence to SQLite
+## Quick Tests
 
-### In progress
+```bash
+# Run circuit engine tests
+cd /path/to/hephaistus
+source .venv/bin/activate
+python -m pytest tests/test_circuit_engine.py -v
 
-7. **Companion UI (Phase 4):** React + Tauri desktop app
-   - Import Simulation Dialog
-   - Session Status Panel
-   - LLM Chat Interface
-   - Patch Plan Review
+# Parse a schematic
+python -m hephaistus_circuit.cli parse fixtures/schematics/rectifier.kicad_sch
 
-### Future
-
-8. Optional KiCad IPC adapter when schematic support matures
-
-## Key technical decisions
-
-### Stub-based restructuring (2026-08-04)
-
-The apply flow was rebuilt around stubs (wire + net label) instead of physical wire-breaking advice:
-
-- **AI contract:** series insertions / re-wiring are expressed purely as pin net re-assignments in the JSON state
-- **Apply semantics:** when a net loses member pins, ALL its wires/junctions/labels are stripped, then every former member pin gets a stub carrying its NEW net name
-- **Power symbols:** anchor their nets (move = rejected with warning)
-- **Library embedding:** missing libId symbols are auto-embedded from installed KiCad libraries
-
-This preserves user geometry and avoids complex wire surgery operations.
+# Apply a patch plan (dry-run)
+python -m hephaistus_circuit.cli apply-plan fixtures/schematics/rectifier.kicad_sch examples/patches/insert_shunt.json --dry-run
+```

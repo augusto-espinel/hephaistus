@@ -1,5 +1,7 @@
 # SPICE Property Inheritance
 
+> **Note:** Implementation details have moved to [`backend/hephaistus_circuit/IMPLEMENTATION.md`](../backend/hephaistus_circuit/IMPLEMENTATION.md). This document retains the design rationale and historical context.
+
 ## Problem
 
 When HephAIstus adds new components (especially SPICE subcircuits), they may fail simulation because critical `Sim.*` properties are missing from the instance.
@@ -450,6 +452,53 @@ Corrected bounds (symbol positions only):
 3. **Validation:** Warn if SPICE symbol is missing critical properties
 4. **Library Path Resolution:** Auto-resolve relative library paths
 5. **Property Value Validation:** Test with various B-source formulas
+
+### Deferred: Semantic Abstraction vs. Raw KiCad Fields
+
+**Status:** Deferred until more use cases are tested
+
+**Context:**
+The current parser extracts SPICE properties into semantic fields like `value` for the LLM. For B-sources, `sim.param` content is parsed into `value`, and patches are applied back to `sim.param`. The apply layer handles the mapping between semantic fields and KiCad property names.
+
+**Current Design:**
+```
+KiCad: sim.param = "V = V(out) * {gain}"
+    ↓
+JSON State: value = "V = V(out) * {gain}"
+    ↓
+LLM operates on: "value"
+    ↓
+Patch: set "value" → "new formula"
+    ↓
+Apply: writes back to sim.param in .kicad_sch
+```
+
+**Benefits of current approach:**
+- LLM doesn't need to know KiCad-specific property names (`Sim.Params`, `Sim.Device`, etc.)
+- Apply layer isolates LLM from KiCad implementation details
+- New components automatically get all required properties from library embedding
+
+**Potential Future Need:**
+If the LLM needs to reason about additional KiCad fields (e.g., `sim.type` for B-sources, `Sim.Pins` for subcircuits), consider exposing a `_kicad_fields` object in the JSON state:
+
+```json
+{
+  "type": "BSource",
+  "reference": "B1",
+  "value": "V = V(out) * {gain}",
+  "_kicad_fields": {
+    "sim.param": "V = V(out) * {gain}",
+    "sim.type": "V"
+  }
+}
+```
+
+This would provide:
+- Transparency for debugging
+- Extensibility for future field requirements
+- Clear separation: LLM modifies semantic `value`, system maps back to correct KiCad properties
+
+**Decision:** Defer this until testing reveals concrete use cases where the LLM needs visibility into raw KiCad properties for reasoning. The current apply-layer translation is sufficient for modification operations.
 
 ---
 

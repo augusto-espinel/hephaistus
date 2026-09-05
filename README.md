@@ -2,17 +2,39 @@
 
 HephAIstus is an AI copilot for KiCad schematic design and circuit simulation.
 
-It is being rebuilt as a **companion application** that sits beside KiCad, understands schematic and simulation context, answers engineering questions, and applies previewable, validated changes without requiring the user to copy files, screenshots, or console output into an external chat.
+It sits beside KiCad, understands schematic and simulation context, answers engineering questions, and applies previewable, validated changes without requiring the user to copy files, screenshots, or console output into an external chat.
 
-## Current branch
+## Documentation Guide
 
-`feature/companion-reset` is a deliberate architectural reset. The previous VS Code extension prototype is preserved in:
+### Start Here
 
-- Branch: `archive/vscode-prototype`
-- Tag: `vscode-prototype-2026-08-19`
-- Optional local worktree: `../hephaistus-legacy`
+- **[`CONTEXT.md`](CONTEXT.md)** — Project summary, architecture overview, and document map. Start here if you're new to the project.
+- **[`docs/vision.md`](docs/vision.md)** — One-sentence mission, problem statement, and operating principles.
 
-## Product direction
+### By Task
+
+| Task | Read |
+|------|------|
+| Understanding the product | `docs/vision.md` → `docs/spec.md` |
+| Architecture and components | `docs/ARCHITECTURE.md` |
+| Patch operations (LLM output contract) | `docs/patch-plan-v1.md` |
+| User experience scenarios | `docs/use_cases_blueprint.md` |
+| Testing procedures | `docs/TEST-MANUAL.md` |
+| Implementation deep dives | `backend/hephaistus_circuit/IMPLEMENTATION.md`, `backend/hephaistus_context/IMPLEMENTATION.md` |
+| LLM context assembly | `docs/LLM_CONTEXT.md` |
+
+### Reference Documents
+
+| Document | Scope |
+|----------|-------|
+| `docs/spec.md` | Product specification: workflows, validation gates, acceptance criteria |
+| `docs/ARCHITECTURE.md` | Technical architecture: components, data flow, implementation status |
+| `docs/patch-plan-v1.md` | JSON schema for LLM-produced mutation plans |
+| `docs/use_cases_blueprint.md` | User stories and milestone mapping |
+| `docs/TEST-MANUAL.md` | Manual test procedures |
+| `docs/migration-from-vscode-prototype.md` | Historical context for the VS Code extension archive |
+
+## Product Direction
 
 The target workflow is:
 
@@ -24,32 +46,51 @@ The target workflow is:
 6. Re-run ERC and/or simulation automatically.
 7. Keep an auditable history with rollback information.
 
-## Core documents
+## Implementation Status
 
-- [`docs/vision.md`](docs/vision.md)
-- [`docs/spec.md`](docs/spec.md)
-- [`docs/architecture.md`](docs/architecture.md)
-- [`docs/use_cases_blueprint.md`](docs/use_cases_blueprint.md)
-- [`docs/migration-from-vscode-prototype.md`](docs/migration-from-vscode-prototype.md)
-- [`docs/patch-plan-v1.md`](docs/patch-plan-v1.md)
+### Completed
 
-## Status
+| Component | Description |
+|-----------|-------------|
+| KiCad ingestion | Parse `.kicad_sch` to JSON state |
+| Patch operations | 7 operation types with validation |
+| Stub-based restructuring | Series insertions, net reassignments |
+| SPICE property inheritance | Auto-copy `Sim.*` properties from libraries |
+| Simulation output parsing | Ngspice console, DC op, raw waveforms |
+| Session persistence | Project-scoped sessions in `.hephaistus/` |
+| LLM context assembly | Token-budgeted layered context |
+| Companion UI | React-based chat, context inspector, history |
 
-The deterministic circuit backend has begun. Current implementation includes:
+### In Progress
 
-- parser/apply wrappers ported into `backend/hephaistus_circuit/`;
-- explicit patch-plan API in `backend/hephaistus_circuit/engine.py`;
-- CLI entry point (`hephaistus-circuit parse` / `apply-plan`);
-- versioned `hephaistus/patch-plan/v1` contract with semantic operation types;
-- true `--dry-run` validation against temporary round-trip copies;
-- structured results with plan IDs, affected nets/components, deltas, warnings, and stable error codes;
-- 14 deterministic round-trip/safety regression tests in `tests/test_circuit_engine.py`;
-- chained split, parallel addition, RL chain/library embedding, value update, and rejection coverage;
-- usable KiCad 10 rectifier fixture at `fixtures/schematics/rectifier.kicad_sch`;
-- example patch at `examples/patches/insert_shunt.json`.
+- Simulation execution (beyond ingestion)
+- KiCad IPC integration (future)
 
-Run tests with:
+## Quick Start
 
 ```bash
-.venv/bin/python -m unittest tests.test_circuit_engine -v
+# Clone and setup
+git clone https://github.com/your-org/hephaistus.git
+cd hephaistus
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+
+# Run tests
+python -m pytest tests/ -v
+
+# Parse a schematic
+python -m hephaistus_circuit.cli parse fixtures/schematics/rectifier.kicad_sch
+
+# Apply a patch plan (dry-run)
+python -m hephaistus_circuit.cli apply-plan fixtures/schematics/rectifier.kicad_sch examples/patches/insert_shunt.json --dry-run
 ```
+
+## Branch Information
+
+- Active branch: `feature/companion-reset`
+- Archive: `archive/vscode-prototype` (tag: `vscode-prototype-2026-08-19`)
+
+## License
+
+[License information here]
